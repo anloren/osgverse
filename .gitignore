@@ -46,3 +46,8 @@ local.properties
 build*/
 sdk*/
 .gitnexus
+
+# macOS app build / run artifacts
+*.log
+dist/
+earth_cache/

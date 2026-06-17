@@ -320,6 +320,11 @@ IF(VERSE_SUPPORT_CPP17)
         # disable warning in include/osg/GraphicsCostEstimator
         ADD_COMPILE_OPTIONS(-Wno-psabi)
     ENDIF(NOT WIN32)
+    IF(APPLE)
+        # osgVerse serializers pass trivially-copyable osg types (Matrixd/Vec4d) through
+        # variadic InputUserData::add(); AppleClang promotes -Wnon-pod-varargs to an error.
+        ADD_COMPILE_OPTIONS(-Wno-non-pod-varargs)
+    ENDIF(APPLE)
 ENDIF(VERSE_SUPPORT_CPP17)
 
 IF(MUSA_FOUND)
@@ -724,10 +729,11 @@ IF(OSG_INCLUDE_DIR AND OSG_LIB_DIR)
             MESSAGE(STATUS "[osgVerse] Common third-party libraries (zlib, jpeg, png, freetype, tiff) not provided.")
         ENDIF()
 
-        IF(TIFF_FOUND)
+        IF(TIFF_FOUND OR TIFF_LIBRARY_RELEASE)
+            SET(TIFF_FOUND ON)
             SET(VERSE_WITH_TIFF_LIBRARY ON)
             SET(THIRDPARTY_LIBRARIES ${THIRDPARTY_LIBRARIES} ${TIFF_LIBRARY_RELEASE})
-        ENDIF(TIFF_FOUND)
+        ENDIF()
     ENDIF(VERSE_BUILD_3RDPARTIES)
 
     # Actually add sub-directories

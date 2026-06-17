@@ -28,7 +28,7 @@ USE_SERIALIZER_WRAPPER(DracoGeometry)
 #endif
 
 #define EARTH_INTERSECTION_MASK 0xf0000000
-#define SIMPLE_VERSION 0
+#define SIMPLE_VERSION 1
 
 extern std::vector<osg::Camera*> configureEarthRendering(
         osgViewer::View& viewer, osg::Group* root, osg::Node* earth, osgVerse::EarthAtmosphereOcean& eData,
@@ -296,5 +296,41 @@ int main(int argc, char** argv)
 
     int screenNo = 0; arguments.read("--screen", screenNo);
     viewer.setUpViewOnSingleScreen(screenNo);
+
+    // Headless auto-capture: render a fixed number of frames (letting the database
+    // pager stream tiles) then grab the GL framebuffer to a PNG. Used to verify the
+    // earth renders without relying on OS screen-capture permissions.
+    const char* autoCap = getenv("EARTH_AUTOCAP");
+    if (autoCap && autoCap[0])
+    {
+        osg::ref_ptr<osgViewer::ScreenCaptureHandler::WriteToFile> writer =
+            new osgViewer::ScreenCaptureHandler::WriteToFile(
+                "/tmp/earth_capture", "png",
+                osgViewer::ScreenCaptureHandler::WriteToFile::OVERWRITE);
+        osg::ref_ptr<osgViewer::ScreenCaptureHandler> capturer =
+            new osgViewer::ScreenCaptureHandler(writer.get(), 1);
+        viewer.addEventHandler(capturer.get());
+
+        int total = atoi(autoCap); if (total < 100) total = 600;
+        // Optional: aim the sun at the camera-facing hemisphere so the day side
+        // is visible in the capture. EARTH_SUN_TO_CAMERA=1 (or -1 to flip sign).
+        const char* sunCam = getenv("EARTH_SUN_TO_CAMERA");
+        float sunSign = (sunCam && atof(sunCam) < 0.0) ? -1.0f : 1.0f;
+        if (!viewer.isRealized()) viewer.realize();
+        for (int i = 0; i < total && !viewer.done(); ++i)
+        {
+            if (sunCam)
+            {
+                osg::Vec3d eye, center, up;
+                viewer.getCamera()->getViewMatrixAsLookAt(eye, center, up);
+                osg::Vec3 dir(eye); dir.normalize(); dir *= sunSign;
+                earthRenderingUtils.commonUniforms["WorldSunDir"]->set(dir);
+            }
+            viewer.frame();
+            if (i == total - 5) capturer->captureNextFrame(viewer);
+        }
+        viewer.frame();  // flush the pending capture
+        return 0;
+    }
     return viewer.run();
 }

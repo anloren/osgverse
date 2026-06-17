@@ -64,3 +64,7 @@ ENDIF()
 INCLUDE_DIRECTORIES(BEFORE .)
 ADD_LIBRARY(${LIBRARY_NAME} STATIC ${GLFW_SOURCE_FILES})
 SET_PROPERTY(TARGET ${LIBRARY_NAME} PROPERTY FOLDER "THIRD_PARTY")
+IF(APPLE)
+    TARGET_LINK_LIBRARIES(${LIBRARY_NAME} "-framework Cocoa" "-framework IOKit"
+                          "-framework CoreFoundation" "-framework CoreVideo")
+ENDIF(APPLE)
