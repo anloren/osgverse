@@ -184,25 +184,17 @@ protected:
 
 static std::string createCustomPath(int type, const std::string& prefix, int x, int y, int z)
 {
+    // 内部瓦片是 TMS（OriginBottomLeft=1，原点左下）。在线服务（ArcGIS / Terrarium）
+    // 都是 XYZ（原点左上），所以把 Y 翻转成 XYZ 行号。
+    int yXYZ = (int)pow(2.0, (double)z) - 1 - y;
     if (type == osgVerse::TileCallback::ORTHOPHOTO)
-    {
-#if SIMPLE_VERSION
-        if (z > 4)
-#else
-        if (z > 13)
-#endif
-        {
-            std::string prefix2 = "https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}";
-            return osgVerse::TileCallback::createPath(prefix2, x, pow(2, z) - y - 1, z);
-        }
-    }
+        return osgVerse::TileCallback::createPath(prefix, x, yXYZ, z);
+    else if (type == osgVerse::TileCallback::ELEVATION)
+        return osgVerse::TileCallback::createPath(prefix, x, yXYZ, z);
     else if (type == osgVerse::TileCallback::USER)
-        return osgVerse::TileCallback::createPath(prefix, x, pow(2, z) - y - 1, z);
-#if SIMPLE_VERSION
-    else if (z > 3) return "";  // for elevation & ocean-mask, ignore deeper levels
-#else
-    else if (z > 8) return "";  // for elevation & ocean-mask, ignore deeper levels
-#endif
+        return osgVerse::TileCallback::createPath(prefix, x, yXYZ, z);
+    // OCEAN_MASK：仍用本地 mbtiles（TMS，不翻转），深层级丢弃
+    if (z > 3) return "";
     return osgVerse::TileCallback::createPath(prefix, x, y, z);
 }
 
@@ -222,17 +214,12 @@ int main(int argc, char** argv)
     if (arguments.read("--thrown")) manipulatorCanThrow = true;
 
     // Create earth
-#if !SIMPLE_VERSION
-    std::string earthURLs = " Orthophoto=mbtiles://" + mainFolder + "/Earth/satellite-2017-jpg-z13.mbtiles/{z}-{x}-{y}.jpg"
-                            " Elevation=mbtiles://" + mainFolder + "/Earth/elevation-google-tif-z8.mbtiles/{z}-{x}-{y}.tif"
-                            " OceanMask=mbtiles://" + mainFolder + "/Earth/aspect-slope-tif-z8.mbtiles/{z}-{x}-{y}.tif"
-#else
-    std::string earthURLs = " Orthophoto=mbtiles://" + mainFolder + "/Earth/DOM_lv4.mbtiles/{z}-{x}-{y}.jpg"
-                            " Elevation=mbtiles://" + mainFolder + "/Earth/DEM_lv3.mbtiles/{z}-{x}-{y}.tif"
-                            " OceanMask=mbtiles://" + mainFolder + "/Earth/Mask_lv3.mbtiles/{z}-{x}-{y}.tif"
-#endif
-                            /*" MaximumLevel=8"*/" UseWebMercator=1 UseEarth3D=1 OriginBottomLeft=1"
-                            " TileElevationScale=3 TileSkirtRatio=" + skirtRatio;
+    std::string earthURLs =
+        " Orthophoto=https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+        " Elevation=mbtiles://" + mainFolder + "/Earth/DEM_lv3.mbtiles/{z}-{x}-{y}.tif"
+        " OceanMask=mbtiles://" + mainFolder + "/Earth/Mask_lv3.mbtiles/{z}-{x}-{y}.tif"
+        " MaximumLevel=14 UseWebMercator=1 UseEarth3D=1 OriginBottomLeft=1"
+        " TileElevationScale=3 TileSkirtRatio=" + skirtRatio;
     osg::ref_ptr<osgDB::Options> earthOptions = new osgDB::Options(earthURLs);
     earthOptions->setPluginData("UrlPathFunction", (void*)createCustomPath);
 
