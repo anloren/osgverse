@@ -84,6 +84,27 @@ std::pair<osg::Geometry*, TileCallback*> TileCallback::findParentTile(osg::Group
     return std::pair<osg::Geometry*, TileCallback*>();
 }
 
+osg::Image* TileCallback::decodeTerrarium(const osg::Image* src)
+{
+    if (!src) return NULL;
+    int w = src->s(), h = src->t();
+    osg::ref_ptr<osg::Image> dst = new osg::Image;
+    dst->allocateImage(w, h, 1, GL_RED, GL_FLOAT);
+    dst->setInternalTextureFormat(GL_R32F);
+    float* out = (float*)dst->data();
+    for (int t = 0; t < h; ++t)
+        for (int s = 0; s < w; ++s)
+        {
+            osg::Vec4 c = src->getColor(osg::Vec2(((float)s + 0.5f) / (float)w,
+                                                  ((float)t + 0.5f) / (float)h));
+            unsigned char r = (unsigned char)(c.r() * 255.0f + 0.5f);
+            unsigned char g = (unsigned char)(c.g() * 255.0f + 0.5f);
+            unsigned char b = (unsigned char)(c.b() * 255.0f + 0.5f);
+            out[t * w + s] = decodeTerrariumHeight(r, g, b);
+        }
+    return dst.release();
+}
+
 osg::Texture* TileCallback::createLayerImage(LayerType id, bool& emptyPath, const osgDB::Options* opt,
                                              osg::NodeVisitor::ImageRequestHandler* irh)
 {
@@ -104,7 +125,14 @@ osg::Texture* TileCallback::createLayerImage(LayerType id, bool& emptyPath, cons
         osgDB::ReaderWriter* rw = TileManager::instance()->getReaderWriter(protocol, url);
         osg::ref_ptr<osg::Image> image = rw ? rw->readImage(url, opt).takeImage() : NULL;
         //osg::ref_ptr<osg::Image> image = osgDB::readImageFile(url, opt);
-        if (!image) return NULL; else tex2D->setImage(image.get());
+        if (!image) return NULL;
+        if (id == ELEVATION && _elevationEncoding == TERRARIUM_ELEVATION &&
+            image->getDataType() == GL_UNSIGNED_BYTE)
+        {
+            osg::ref_ptr<osg::Image> decoded = TileCallback::decodeTerrarium(image.get());
+            if (decoded.valid()) image = decoded;
+        }
+        tex2D->setImage(image.get());
     }
     return tex2D.release();
 }

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <osg/io_utils>
 #include <osg/Geometry>
 #include <osg/MatrixTransform>
@@ -192,6 +193,13 @@ protected:
 
             std::string scale = opt->getPluginStringData("TileElevationScale");
             if (!scale.empty()) tileCB->setElevationScale((float)atof(scale.c_str()));
+
+            std::string elevEnc = opt->getPluginStringData("ElevationEncoding");
+            std::transform(elevEnc.begin(), elevEnc.end(), elevEnc.begin(), ::tolower);
+            if (elevEnc == "terrarium")
+                tileCB->setElevationEncoding(osgVerse::TileCallback::TERRARIUM_ELEVATION);
+            else
+                tileCB->setElevationEncoding(osgVerse::TileCallback::RAW_ELEVATION);
         }
 
         osg::Vec3d tileMin, tileMax; double tileWidth = 0.0, tileHeight = 0.0;

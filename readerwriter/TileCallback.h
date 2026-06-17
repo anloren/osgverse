@@ -30,7 +30,8 @@ namespace osgVerse
     public:
         TileCallback(bool g = true)
         :   _x(-1), _y(-1), _z(-1), _skirtRatio(0.02f), _elevationScale(1.0f), _withGlobeAttr(g), _flatten(true),
-            _bottomLeft(false), _useWebMercator(false), _layersDone(false) { _createPathFunc = NULL; }
+            _bottomLeft(false), _useWebMercator(false), _layersDone(false), _elevationEncoding(RAW_ELEVATION)
+        { _createPathFunc = NULL; }
         virtual void operator()(osg::Node* node, osg::NodeVisitor* nv);
 
         virtual osg::Vec3d convertToECEF(const osg::Vec3d& lla) const;
@@ -51,6 +52,7 @@ namespace osgVerse
 
         enum LayerType { ELEVATION = 0, ORTHOPHOTO, OCEAN_MASK, USER };
         enum LayerState { DONE = 0, DEFERRED, FAILED };
+        enum ElevationEncoding { RAW_ELEVATION = 0, TERRARIUM_ELEVATION };
         typedef std::pair<std::string, LayerState> DataPathPair;
 
         virtual osg::Texture* findAndUseParentData(LayerType id, osg::Group* parent);
@@ -82,6 +84,16 @@ namespace osgVerse
         /** Set a custom function to construct tile path string */
         void setCreatePathFunction(CreatePathFunc f) { _createPathFunc = f; }
         CreatePathFunc getCreatePathFunction() const { return _createPathFunc; }
+
+        void setElevationEncoding(ElevationEncoding e) { _elevationEncoding = e; }
+        ElevationEncoding getElevationEncoding() const { return _elevationEncoding; }
+
+        // Terrarium PNG encodes height in RGB: height = (R*256 + G + B/256) - 32768 (meters)
+        static float decodeTerrariumHeight(unsigned char r, unsigned char g, unsigned char b)
+        { return ((float)r * 256.0f + (float)g + (float)b / 256.0f) - 32768.0f; }
+
+        // Convert an 8-bit RGB Terrarium image into a single-channel GL_FLOAT height image (meters)
+        static osg::Image* decodeTerrarium(const osg::Image* src);
 
         /** Set tile skirt length ratio */
         void setSkirtRatio(float s) { _skirtRatio = s; }
@@ -125,6 +137,7 @@ namespace osgVerse
         osg::Matrix _worldToLocal;
         osg::Vec3d _extentMin, _extentMax;
         CreatePathFunc _createPathFunc;
+        ElevationEncoding _elevationEncoding;
         int _x, _y, _z; float _skirtRatio, _elevationScale;
         bool _withGlobeAttr, _flatten, _bottomLeft, _useWebMercator, _layersDone;
     };

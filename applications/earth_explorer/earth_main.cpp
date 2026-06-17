@@ -216,10 +216,10 @@ int main(int argc, char** argv)
     // Create earth
     std::string earthURLs =
         " Orthophoto=https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-        " Elevation=mbtiles://" + mainFolder + "/Earth/DEM_lv3.mbtiles/{z}-{x}-{y}.tif"
+        " Elevation=https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
         " OceanMask=mbtiles://" + mainFolder + "/Earth/Mask_lv3.mbtiles/{z}-{x}-{y}.tif"
-        " MaximumLevel=14 UseWebMercator=1 UseEarth3D=1 OriginBottomLeft=1"
-        " TileElevationScale=3 TileSkirtRatio=" + skirtRatio;
+        " ElevationEncoding=terrarium MaximumLevel=14 UseWebMercator=1 UseEarth3D=1 OriginBottomLeft=1"
+        " TileElevationScale=2.0 TileSkirtRatio=" + skirtRatio;
     osg::ref_ptr<osgDB::Options> earthOptions = new osgDB::Options(earthURLs);
     earthOptions->setPluginData("UrlPathFunction", (void*)createCustomPath);
 
