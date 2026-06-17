@@ -17,6 +17,7 @@
 #include <readerwriter/TileCallback.h>
 #include <readerwriter/FileCache.h>
 #include <pipeline/Pipeline.h>
+#include "EarthControlUI.h"
 #include <VerseCommon.h>
 #include <iostream>
 #include <sstream>
@@ -280,6 +281,12 @@ int main(int argc, char** argv)
     viewer.setDatabasePager(pager);
     viewer.setSceneData(root.get());
     //viewer.setThreadingModel(osgViewer::Viewer::SingleThreaded);
+
+    // ImGui 控制面板 — 挂到最终 HUD 相机（cameras[3]），确保在地球图像之上绘制
+    osg::ref_ptr<osgVerse::ImGuiManager> imgui = new osgVerse::ImGuiManager;
+    imgui->setChineseSimplifiedFont(MISC_DIR + std::string("LXGWFasmartGothic.otf"));
+    imgui->initialize(new EarthControlUI(earthManipulator.get(), &earthRenderingUtils), false);
+    imgui->addToView(&viewer, cameras[3]);  // cameras[3] = finalCamera (HUD, renders to screen)
 
     int screenNo = 0; arguments.read("--screen", screenNo);
     viewer.setUpViewOnSingleScreen(screenNo);
