@@ -51,3 +51,74 @@
 ## 运行注意
 - 后台启动构建务必先 `cd /Users/franklee/osgverse`（Bash 后台 shell cwd 可能被重置到 claudecode，导致 exit 127）。
 - 重新运行 Setup.sh DEFAULT 是增量的：3rdparty/OSG 已缓存在 build/ 下，只重配+重链+继续。
+
+---
+
+## feature/high-precision-earth-app 功能记录（Tasks 1-7）
+
+本节记录 EarthExplorer 在线高精度地球 + ImGui 控制面板 + macOS .app 打包的关键实现细节。
+
+### 在线数据源
+
+- **正射影像**：ArcGIS World Imagery（XYZ 瓦片）
+  URL 模板：
+  https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}
+  层级 0-19，已覆盖全球，JPEG 压缩，支持跨域。
+
+- **高程 (Terrarium 编码)**：AWS Terrain Tiles
+  URL 模板：
+  https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png
+  PNG 格式，RGB 三通道编码高程。
+
+### Terrarium 高程解码
+
+解码公式（`TileCallback::decodeTerrarium`）：
+
+```
+height_m = (R * 256 + G + B / 256.0) - 32768
+```
+
+实现路径：`readerwriter/TileCallback.cpp` 的 `TileCallback::decodeTerrarium()`（声明在 `readerwriter/TileCallback.h`，含纯函数 `decodeTerrariumHeight`）。
+输出格式为 `GL_RED / GL_R32F` 单通道浮点图像（`GL_FLOAT`），下游 `createTileGeometry` 按 `getDataType()==GL_FLOAT` 直接当米数高度使用。
+在 `plugins/osgdb_tms/ReaderWriterTMS.cpp`（verse_tms 插件）解析 earthURLs option `ElevationEncoding=terrarium`，调用 `setElevationEncoding(TERRARIUM_ELEVATION)` 触发解码。
+
+### TMS ↔ XYZ Y轴翻转
+
+在线 XYZ 瓦片（TMS 规范 Y 轴从下往上，而 Web 地图 Y 轴从上往下），需要做 Y 翻转：
+
+```cpp
+// createCustomPath 中
+int yXYZ = (1 << z) - 1 - y;  // == 2^z - 1 - y
+```
+
+影响：影像层与高程层均需翻转，否则纬度方向颠倒。
+
+### ImGui 控制面板
+
+- 实现文件：`applications/earth_explorer/EarthControlUI.h`
+- 使用 `osgVerse::ImGuiManager` 管理面板生命周期。
+- **关键坑**：`ImGuiManager` 必须绑定到 HUD finalCamera（`cameras[3]`），即：
+  ```cpp
+  imgui->addToView(&viewer, cameras[3]);
+  ```
+  若绑定到主 cameras[0]，每帧 clear 操作会擦掉 ImGui 渲染输出，面板不可见。
+- 面板功能：相机坐标读数（纬/经/高度）、太阳方位/高度角、海洋开关、曝光系数、跳转经纬度、书签巡游。
+- 标题栏显示 "Earth Control / 地球控制台"。
+
+### macOS .app 打包（packaging/package_macos.sh）
+
+打包脚本的核心工作：
+1. 创建 `EarthExplorer.app/Contents/{MacOS,lib,Resources}` 目录结构。
+2. 将 `build/sdk_core/bin/osgVerse_EarthExplorer` 复制到 `Contents/MacOS/`。
+3. 将 `build/sdk_core/lib/` 的所有 dylib 复制到 `Contents/lib/`，插件子目录 `osgPlugins-3.6.5/` 一并复制。
+4. **rpath 修复**：用 `install_name_tool` 把所有 Linux 风格 `$ORIGIN`、绝对路径 rpath 替换为：
+   - 主二进制：`@executable_path/../lib`
+   - dylib 内部引用：`@loader_path` / `@loader_path/..`
+5. **插件查找路径兼容**：OSG 插件查找逻辑从 `BASE_DIR/bin/` 往上找 `osgPlugins-X.Y.Z/`，因此额外在 `Contents/bin/osgPlugins-3.6.5` 创建指向 `../lib/osgPlugins-3.6.5` 的符号链接。
+6. 命令行运行入口：`packaging/run.sh`（设置 `DYLD_LIBRARY_PATH` 并启动二进制）。
+
+### 验收结果（2026-06-18）
+
+- Step 1 命令行：错误计数 = **0**，GL 上下文 = `OpenGL 4.1 Metal - 90.5; GLSL: 410; Renderer: Apple M4 Pro`。截图 (`/tmp/earth_capture_0.png`) 显示：深空背景下完整球形地球（Africa/Atlantic 可见）、表面着色正常、控制面板 "Earth Control / 地球控制台" 在左上角可见，所有字段均已渲染。
+- Step 2 .app 启动：`APP RUNNING (launch OK)`（PID 确认进程存活）。
+- Step 3 交互测试：须由用户手动在桌面验证（跳转经纬度、书签巡游等需鼠标输入，无法无头运行）。
