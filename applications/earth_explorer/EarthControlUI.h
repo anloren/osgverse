@@ -21,6 +21,7 @@ struct EarthControlUI : public osgVerse::ImGuiContentHandler
     osgViewer::Viewer* _viewer;                      // 用于退出程序
     float _sunAz, _sunEl;     // 太阳方位角/高度角（度）
     float _exposure;          // HDR 曝光
+    float _globalOpaque;      // 大气强度
     bool  _ocean;             // 海洋开关
     float _gotoLat, _gotoLon, _gotoAltKm;            // 跳转目标
     int   _bookmarkTime;                             // 下一个书签的时间戳（帧）
@@ -28,7 +29,7 @@ struct EarthControlUI : public osgVerse::ImGuiContentHandler
     int  _year, _month, _day; float _utcHour;
 
     EarthControlUI(osgVerse::EarthManipulator* m, osgVerse::EarthAtmosphereOcean* e, osgViewer::Viewer* v)
-        : _mani(m), _earth(e), _viewer(v), _sunAz(0.0f), _sunEl(0.0f), _exposure(0.25f), _ocean(true)
+        : _mani(m), _earth(e), _viewer(v), _sunAz(0.0f), _sunEl(0.0f), _exposure(0.25f), _globalOpaque(1.0f), _ocean(true)
         , _gotoLat(35.36f), _gotoLon(138.73f), _gotoAltKm(50.0f), _bookmarkTime(0)
         , _realTimeSun(false), _followClock(true), _year(2024), _month(6), _day(21), _utcHour(18.0f) {}
 
@@ -108,6 +109,8 @@ struct EarthControlUI : public osgVerse::ImGuiContentHandler
                     _earth->commonUniforms["OceanOpaque"]->set(_ocean ? 1.0f : 0.0f);
                 if (ImGui::SliderFloat(u8"曝光 Exposure", &_exposure, 0.05f, 1.0f, "%.2f"))
                     _earth->commonUniforms["HdrExposure"]->set(_exposure);
+                if (ImGui::SliderFloat(u8"大气强度 Atmosphere", &_globalOpaque, 0.0f, 1.0f, "%.2f"))
+                    _earth->commonUniforms["GlobalOpaque"]->set(_globalOpaque);
             }
             // ---- 跳转 ----
             if (ImGui::CollapsingHeader(u8"跳转 Go To", ImGuiTreeNodeFlags_DefaultOpen))
