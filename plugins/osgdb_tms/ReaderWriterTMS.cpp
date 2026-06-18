@@ -64,6 +64,7 @@ public:
         supportsOption("Elevation", "TMS server URL with wildcards or .mbtiles, applied as elevation layer");
         supportsOption("OceanMask", "TMS server URL with wildcards or .mbtiles, applied as ocean mask layer");
         supportsOption("User", "TMS server URL with wildcards or .mbtiles, applied as extra overlay layer");
+        supportsOption("Overlay", "TMS/WMTS server URL with wildcards, applied as second overlay layer (e.g. GIBS)");
         supportsOption("UrlPathFunction", "The custom function from setPluginData() to compute tile URL");
         supportsOption("UseEarth3D", "Display TMS tiles as a real earth: default=0");
         supportsOption("UseWebMercator", "Use Web Mercator (Level-0 has 4 tiles): default=0");
@@ -113,6 +114,7 @@ public:
             std::string orthoAddr = osgVerse::WebAuxiliary::urlDecode(options->getPluginStringData("Orthophoto"));
             if (orthoAddr.empty()) orthoAddr = osgVerse::WebAuxiliary::urlDecode(options->getPluginStringData("URL"));
             std::string userAddr = osgVerse::WebAuxiliary::urlDecode(options->getPluginStringData("User"));
+            std::string overlayAddr = osgVerse::WebAuxiliary::urlDecode(options->getPluginStringData("Overlay"));
 
             osg::Vec3d extentMin = osg::Vec3d(-180.0, -90.0, 0.0), extentMax = osg::Vec3d(180.0, 90.0, 0.0);
             std::string strX = options->getPluginStringData("FlatExtentMinX"),
@@ -139,7 +141,7 @@ public:
                 for (int xx = 0; xx < 2; ++xx)
                 {
                     osg::ref_ptr<osg::Node> node = createTile(
-                        elevAddr, orthoAddr, maskAddr, userAddr, x + xx, y + yy, z,
+                        elevAddr, orthoAddr, maskAddr, userAddr, overlayAddr, x + xx, y + yy, z,
                         extentMin, extentMax, options, useWM, flatten);
                     if (!node) continue;
 
@@ -162,7 +164,8 @@ public:
 
 protected:
     osg::Node* createTile(const std::string& elevPath, const std::string& orthPath,
-                          const std::string& maskPath, const std::string& userPath, int x, int y, int z,
+                          const std::string& maskPath, const std::string& userPath,
+                          const std::string& overlayPath, int x, int y, int z,
                           const osg::Vec3d& extentMin, const osg::Vec3d& extentMax,
                           const Options* opt, bool useWM, bool flatten) const
     {
@@ -185,6 +188,7 @@ protected:
         tileCB->setLayerPath(osgVerse::TileCallback::ORTHOPHOTO, orthPath);
         tileCB->setLayerPath(osgVerse::TileCallback::OCEAN_MASK, maskPath);
         tileCB->setLayerPath(osgVerse::TileCallback::USER, userPath);
+        tileCB->setLayerPath(osgVerse::TileCallback::OVERLAY, overlayPath);
         tileCB->setTotalExtent(extentMin, extentMax); tileCB->setTileNumber(x, y, z);
         tileCB->setBottomLeft(atoi(botLeft.c_str()) > 0);
         tileCB->setUseWebMercator(useWM); tileCB->setFlatten(flatten);
@@ -223,12 +227,17 @@ protected:
         osg::ref_ptr<osg::Texture> maskImage = tileCB->createLayerImage(osgVerse::TileCallback::OCEAN_MASK, emptyPath1, opt);
         bool emptyPathU = false;
         osg::ref_ptr<osg::Texture> userImage = tileCB->createLayerImage(osgVerse::TileCallback::USER, emptyPathU, opt);
+        bool emptyPathO = false;
+        osg::ref_ptr<osg::Texture> overlayImage =
+            tileCB->createLayerImage(osgVerse::TileCallback::OVERLAY, emptyPathO, opt);
         if (!orthImage && !emptyPath0)
             { tileCB->setLayerPathState(osgVerse::TileCallback::ORTHOPHOTO, failState); allLayersDone = false; }
         if (!maskImage && !emptyPath1)
             { tileCB->setLayerPathState(osgVerse::TileCallback::OCEAN_MASK, failState); allLayersDone = false; }
         if (!userImage && !emptyPathU)
             { tileCB->setLayerPathState(osgVerse::TileCallback::USER, failState); allLayersDone = false; }
+        if (!overlayImage && !emptyPathO)
+            { tileCB->setLayerPathState(osgVerse::TileCallback::OVERLAY, failState); allLayersDone = false; }
         tileCB->setLayersDone(allLayersDone);
 
         // FIXME: this makes no future tiles... consider a better way?
@@ -274,6 +283,19 @@ protected:
             geom->getOrCreateStateSet()->setTextureAttributeAndModes(2, userImage.get());
 #endif
             geom->getOrCreateStateSet()->getOrCreateUniform("UvOffset3", osg::Uniform::FLOAT_VEC4)
+                                       ->set(osg::Vec4(0.0f, 0.0f, 1.0f, 1.0f));
+        }
+
+        if (overlayImage.valid())
+        {
+            overlayImage->setClientStorageHint(false);
+            overlayImage->setUnRefImageDataAfterApply(true);
+#if defined(OSG_GLES2_AVAILABLE) || defined(OSG_GLES3_AVAILABLE) || defined(OSG_GL3_AVAILABLE)
+            geom->getOrCreateStateSet()->setTextureAttribute(3, overlayImage.get());
+#else
+            geom->getOrCreateStateSet()->setTextureAttributeAndModes(3, overlayImage.get());
+#endif
+            geom->getOrCreateStateSet()->getOrCreateUniform("UvOffset4", osg::Uniform::FLOAT_VEC4)
                                        ->set(osg::Vec4(0.0f, 0.0f, 1.0f, 1.0f));
         }
 
