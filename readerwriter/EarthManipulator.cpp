@@ -560,51 +560,46 @@ bool EarthManipulator::calcIntersectPoint(float x, float y, osg::Vec3d& point, b
         _clickedPointNode->setNodeMask(0);
     if (_viewer)
     {
-        osg::ref_ptr<osgUtil::LineSegmentIntersector> intersector;
-        if (_world.valid())
+        // 解析 ray–椭球求交，取代每次鼠标都遍历整个地球场景的 IntersectionVisitor
+        // （近地瓦片成千上万时该遍历在主线程很贵，是鼠标卡顿的元凶）。椭球面交点对导航
+        // （旋转/平移/缩放中心）足够；且不依赖近/远平面，比旧的线段延长 hack 更稳。
+        if (_world.valid() && _ellipsoid.valid())
         {
             osg::Matrix invViewProj = osg::Matrix::inverse(
                 _viewer->getCamera()->getViewMatrix() * _viewer->getCamera()->getProjectionMatrix());
             osg::Vec3d s = osg::Vec3d(x, y, -1.0) * invViewProj;
             osg::Vec3d e = osg::Vec3d(x, y, 1.0) * invViewProj;
-
-            // FIXME: very bad implementation here...
-            // As for RTT situation, the earth node will be placed under a camera node, which
-            // makes the near/far plane incorrect and thus affect the intersection here.
-            // The only way presently is to extend the line as long as possible, as we've done.
             osg::Vec3d dir = e - s; dir.normalize();
-            dir = dir * _world->getBound().radius() * 10.0;
-            s -= dir; e += dir;
 
-            intersector = new osgUtil::LineSegmentIntersector(osgUtil::Intersector::MODEL, s, e);
-            osgUtil::IntersectionVisitor iv(intersector.get());
-            iv.setTraversalMask(_intersectionMask);
-            _world->accept(iv);
+            // 把射线变到单位球空间（各轴除以椭球半径），与单位球求交
+            double rE = _ellipsoid->getRadiusEquator(), rP = _ellipsoid->getRadiusPolar();
+            osg::Vec3d so(s.x() / rE, s.y() / rE, s.z() / rP);
+            osg::Vec3d dd(dir.x() / rE, dir.y() / rE, dir.z() / rP);
+            double a = dd * dd, b = 2.0 * (so * dd), c = so * so - 1.0, disc = b * b - 4.0 * a * c;
+            if (a > 0.0 && disc >= 0.0)
+            {
+                double sq = sqrt(disc), t0 = (-b - sq) / (2.0 * a), t1 = (-b + sq) / (2.0 * a);
+                double t = (t0 >= 0.0) ? t0 : t1;   // 取最近的非负交点
+                if (t >= 0.0) { point = s + dir * t; result = true; }
+            }
+            if (result && showPoint)
+                _ellipsoid->convertXYZToLatLongHeight(
+                    point.x(), point.y(), point.z(), _latestLatitude, _latestLongitude, _latestAltitude);
         }
         else
         {
-            intersector = new osgUtil::LineSegmentIntersector(osgUtil::Intersector::PROJECTION, x, y);
+            osg::ref_ptr<osgUtil::LineSegmentIntersector> intersector =
+                new osgUtil::LineSegmentIntersector(osgUtil::Intersector::PROJECTION, x, y);
             osgUtil::IntersectionVisitor iv(intersector.get());
             iv.setTraversalMask(_intersectionMask);
             _viewer->getCamera()->accept(iv);
-        }
-
-        if (intersector.valid() && intersector->containsIntersections())
-        {
-            osgUtil::LineSegmentIntersector::Intersection hit = intersector->getFirstIntersection();
-            point = hit.getWorldIntersectPoint(); result = true;
-
-            if (showPoint)
+            if (intersector->containsIntersections())
             {
-                _ellipsoid->convertXYZToLatLongHeight(
-                    point.x(), point.y(), point.z(), _latestLatitude, _latestLongitude, _latestAltitude);
+                point = intersector->getFirstIntersection().getWorldIntersectPoint(); result = true;
+                if (showPoint)
+                    _ellipsoid->convertXYZToLatLongHeight(
+                        point.x(), point.y(), point.z(), _latestLatitude, _latestLongitude, _latestAltitude);
             }
-#if false
-            double lat, lon, height;
-            _ellipsoid->convertXYZToLatLongHeight(point.x(), point.y(), point.z(), lat, lon, height);
-            std::cout << hit.nodePath.back()->getName() << ": Lat = " << osg::RadiansToDegrees(lat)
-                      << ", Lon = " << osg::RadiansToDegrees(lon) << ", H = " << height << std::endl;
-#endif
         }
     }
 
