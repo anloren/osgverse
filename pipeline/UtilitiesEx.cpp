@@ -501,6 +501,7 @@ bool EarthAtmosphereOcean::create(osg::Texture* tr, osg::Texture* ir, osg::Textu
     commonUniforms["OceanOpaque"] = new osg::Uniform("OceanOpaque", 1.0f);
     commonUniforms["UnderOcean"] = new osg::Uniform("UnderOcean", 1.0f);
     commonUniforms["HdrExposure"] = new osg::Uniform("HdrExposure", 0.25f);
+    commonUniforms["LabelOpacity"] = new osg::Uniform("LabelOpacity", 1.0f);
 
     oceanUniforms["ScreenSize"] = new osg::Uniform("ScreenSize", osg::Vec2(1920.0f, 1080.0f));
     oceanUniforms["CameraToOcean"] = new osg::Uniform("CameraToOcean", osg::Matrixf());

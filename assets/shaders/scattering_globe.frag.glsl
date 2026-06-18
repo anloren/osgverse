@@ -5,7 +5,7 @@ uniform sampler3D InscatterSampler;
 uniform sampler2D GlareSampler;
 uniform vec4 UvOffset1, UvOffset2, UvOffset3;
 uniform vec3 WorldCameraPos, WorldSunDir, EarthOrigin;
-uniform float HdrExposure, GlobalOpaque;
+uniform float HdrExposure, GlobalOpaque, LabelOpacity;
 
 VERSE_FS_IN vec3 vertexInWorld, normalInWorld;
 VERSE_FS_IN vec4 texCoord;
@@ -53,7 +53,7 @@ void main()
 
     vec4 groundColor = VERSE_TEX2D(SceneSampler, texCoord.st * UvOffset1.zw + UvOffset1.xy);
     vec4 layerColor = VERSE_TEX2D(ExtraLayerSampler, texCoord.st * UvOffset3.zw + UvOffset3.xy);
-    groundColor.rgb = mix(groundColor.rgb, layerColor.rgb, layerColor.a);
+    groundColor.rgb = mix(groundColor.rgb, layerColor.rgb, layerColor.a * clamp(LabelOpacity, 0.0, 1.0));
     if (isSkirt < -0.1 && GlobalOpaque < 0.9) discard;  // hide skirt if transparent
 
     // Mask color: r = aspect, g = slope, b = mask (0 - 0.5: ocean, 0.5 - 1: land)
