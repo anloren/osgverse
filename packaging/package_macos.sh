@@ -60,7 +60,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleShortVersionString</key><string>1.0.0</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleExecutable</key><string>osgVerse_EarthExplorer</string>
-  <key>NSHighResolutionCapable</key><true/>
+  <key>NSHighResolutionCapable</key><false/>
   <key>NSMinimumSystemVersion</key><string>11.0</string>
 </dict>
 </plist>

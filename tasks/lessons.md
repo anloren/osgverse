@@ -122,3 +122,9 @@ int yXYZ = (1 << z) - 1 - y;  // == 2^z - 1 - y
 - Step 1 命令行：错误计数 = **0**，GL 上下文 = `OpenGL 4.1 Metal - 90.5; GLSL: 410; Renderer: Apple M4 Pro`。截图 (`/tmp/earth_capture_0.png`) 显示：深空背景下完整球形地球（Africa/Atlantic 可见）、表面着色正常、控制面板 "Earth Control / 地球控制台" 在左上角可见，所有字段均已渲染。
 - Step 2 .app 启动：`APP RUNNING (launch OK)`（PID 确认进程存活）。
 - Step 3 交互测试：须由用户手动在桌面验证（跳转经纬度、书签巡游等需鼠标输入，无法无头运行）。
+
+### 修复：.app 经 open 启动只渲染左下/部分区域（Retina 2× 缩放）
+- 现象：双击/`open dist/EarthExplorer.app` 时地球只占屏幕一角；但命令行裸二进制或 `run.sh` 能填满。
+- 根因：Info.plist 里 `NSHighResolutionCapable=true` 让全屏窗口拿到 2× 像素后备缓冲（4K 屏 3840×2160），而 osgVerse 地球管线 RTT 按窗口点数 1920×1080 建，合成只落在子区域。`getScreenResolution` 返回点数 1920×1080。
+- 修复：`packaging/package_macos.sh` 的 Info.plist 设 `NSHighResolutionCapable=false`，drawable 变 1920×1080 与 RTT 一致，再由窗口服务放大铺满全屏。代价：Retina 上是 1× 放大（略软），但填满；在线高清瓦片仍提供细节。
+- 验证：`open` 启动 → `osascript` 置前 → `screencapture -x`（本机已授予屏幕录制权限时可用）读全桌面，确认铺满。
