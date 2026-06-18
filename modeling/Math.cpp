@@ -431,12 +431,15 @@ osg::Vec3d Coordinate::convertLLAtoECEF(const osg::Vec3d& lla, const WGS84& wgs8
 {
     // for details on maths see https://en.wikipedia.org/wiki/ECEF
     const double latitude = lla[0], longitude = lla[1], height = lla[2];
-    double sin_latitude = sin(latitude), cos_latitude = cos(latitude);
+    double sin_latitude = sin(latitude), cos_latitude = cos(latitude), polarThreshold = osg::inDegrees(85.05);
     double N = wgs84.radiusEquator / sqrt(1.0 - wgs84.eccentricitySq * sin_latitude * sin_latitude);
-    // Note: the closed-form below is already exact at the poles (cos_latitude == 0 yields
-    // x = y = 0, z = +/-(radiusPolar + height)), so no special-case polar clamp is needed.
-    // A clamp at +/-85.05deg used to collapse the top/bottom Web-Mercator tile row (lat 85.0511deg,
-    // just past the threshold) onto a single pole vertex, producing a pinwheel/star artifact.
+    // Polar clamp: snap geometry beyond +/-85.05deg (the Web Mercator limit) onto the pole point.
+    // Web Mercator tiles carry no data above 85.05deg; without this the top/bottom tile row sits at
+    // its true 85.05deg latitude and leaves an empty polar cap (a hole/disc). Collapsing that row to
+    // the pole instead keeps the cap visually closed. (v0.9 removed this and exposed the holes;
+    // restored because the closed pole reads better than two open caps.)
+    if (latitude > polarThreshold) return osg::Vec3d(0.0, 0.0, wgs84.radiusPolar + height);
+    else if (latitude < -polarThreshold) return osg::Vec3d(0.0, 0.0, -(wgs84.radiusPolar + height));
     return osg::Vec3d((N + height) * cos_latitude * cos(longitude),
                       (N + height) * cos_latitude * sin(longitude),
                       (N * (1 - wgs84.eccentricitySq) + height) * sin_latitude);
