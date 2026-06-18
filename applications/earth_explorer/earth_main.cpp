@@ -189,7 +189,12 @@ static std::string createCustomPath(int type, const std::string& prefix, int x, 
     // 都是 XYZ（原点左上），所以把 Y 翻转成 XYZ 行号。
     int yXYZ = (int)pow(2.0, (double)z) - 1 - y;
     if (type == osgVerse::TileCallback::ORTHOPHOTO)
-        return osgVerse::TileCallback::createPath(prefix, x, yXYZ, z);
+    {
+        // Google 混合瓦片（lyrs=y：卫星影像 + 道路/地名标注）。URL 含 '='/'&'，
+        // osgDB::Options 解析会把多 '=' 的值截断，所以在这里硬编码而非放进 earthURLs。
+        static const std::string google = "https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}";
+        return osgVerse::TileCallback::createPath(google, x, yXYZ, z);
+    }
     else if (type == osgVerse::TileCallback::ELEVATION)
         return osgVerse::TileCallback::createPath(prefix, x, yXYZ, z);
     else if (type == osgVerse::TileCallback::USER)
@@ -216,10 +221,12 @@ int main(int argc, char** argv)
 
     // Create earth
     std::string earthURLs =
-        " Orthophoto=https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+        // Orthophoto 值仅为占位符（非空即启用影像层）；真实 Google 混合瓦片 URL 在
+        // createCustomPath 里拼装——Google URL 含多个 '='，放这里会被 Options 解析截断。
+        " Orthophoto=google"
         " Elevation=https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
         " OceanMask=mbtiles://" + mainFolder + "/Earth/Mask_lv3.mbtiles/{z}-{x}-{y}.tif"
-        " ElevationEncoding=terrarium MaximumLevel=14 UseWebMercator=1 UseEarth3D=1 OriginBottomLeft=1"
+        " ElevationEncoding=terrarium MaximumLevel=19 UseWebMercator=1 UseEarth3D=1 OriginBottomLeft=1"
         " TileElevationScale=2.0 TileSkirtRatio=" + skirtRatio;
     osg::ref_ptr<osgDB::Options> earthOptions = new osgDB::Options(earthURLs);
     earthOptions->setPluginData("UrlPathFunction", (void*)createCustomPath);
