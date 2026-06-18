@@ -172,24 +172,6 @@ osg::Vec3d TileCallback::adjustLatitudeLongitudeAltitude(const osg::Vec3d& exten
 void TileCallback::computeTileExtent(osg::Vec3d& tileMin, osg::Vec3d& tileMax,
                                      double& tileWidth, double& tileHeight) const
 {
-    if (_useWebMercator)
-    {
-        const double PI = osg::PI;
-        double n = pow(2.0, (double)_z);
-        double lonMinDeg = -180.0 + 360.0 * (double)_x / n;
-        double lonMaxDeg = -180.0 + 360.0 * (double)(_x + 1) / n;
-        double rowTop = _bottomLeft ? (n - 1.0 - (double)_y) : (double)_y;
-        double rowBot = rowTop + 1.0;
-        double mercTop = PI * (1.0 - 2.0 * rowTop / n);
-        double mercBot = PI * (1.0 - 2.0 * rowBot / n);
-        double latMaxDeg = osg::RadiansToDegrees(2.0 * atan(exp(mercTop)) - PI * 0.5);
-        double latMinDeg = osg::RadiansToDegrees(2.0 * atan(exp(mercBot)) - PI * 0.5);
-        tileMin = osg::Vec3d(lonMinDeg, latMinDeg, 0.0);
-        tileMax = osg::Vec3d(lonMaxDeg, latMaxDeg, 1.0);
-        tileWidth = lonMaxDeg - lonMinDeg;
-        tileHeight = latMaxDeg - latMinDeg;
-        return;
-    }
     double multiplier = pow(0.5, double(_z));
     tileWidth = multiplier * (_extentMax.x() - _extentMin.x());
     tileHeight = multiplier * (_extentMax.y() - _extentMin.y());
