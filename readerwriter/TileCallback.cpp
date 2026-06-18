@@ -113,7 +113,9 @@ osg::Texture* TileCallback::createLayerImage(LayerType id, bool& emptyPath, cons
 
     std::string url = _createPathFunc ? _createPathFunc((int)id, inputAddr, _x, _y, _z)
                     : TileCallback::createPath(inputAddr, _x, _y, _z);
-    std::string protocol = osgDB::getServerProtocol(url); if (url.empty()) return NULL;
+    // path function returning "" (e.g. layer with a per-zoom cutoff like GIBS z>9 / mask z>3)
+    // is an INTENTIONAL empty path, not a load failure → mark emptyPath so callers skip fail-state + warning
+    std::string protocol = osgDB::getServerProtocol(url); if (url.empty()) { emptyPath = true; return NULL; }
 
     osg::ref_ptr<osg::Texture2D> tex2D = createTexture2D(NULL, osg::Texture::CLAMP_TO_EDGE);
 #if OSG_MIN_VERSION_REQUIRED(3, 1, 5)
@@ -144,7 +146,9 @@ TileGeometryHandler* TileCallback::createLayerHandler(LayerType id, bool& emptyP
 
     std::string url = _createPathFunc ? _createPathFunc((int)id, inputAddr, _x, _y, _z)
                     : TileCallback::createPath(inputAddr, _x, _y, _z);
-    std::string protocol = osgDB::getServerProtocol(url); if (url.empty()) return NULL;
+    // path function returning "" (e.g. layer with a per-zoom cutoff like GIBS z>9 / mask z>3)
+    // is an INTENTIONAL empty path, not a load failure → mark emptyPath so callers skip fail-state + warning
+    std::string protocol = osgDB::getServerProtocol(url); if (url.empty()) { emptyPath = true; return NULL; }
 
     osgDB::ReaderWriter* rw = TileManager::instance()->getReaderWriter(protocol, url);
     return rw ? dynamic_cast<TileGeometryHandler*>(rw->readObject(url, opt).takeObject()) : NULL;
