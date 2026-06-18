@@ -161,16 +161,17 @@ int yXYZ = (1 << z) - 1 - y;  // == 2^z - 1 - y
 - UI 新增 "大气强度 Atmosphere" 滑块（绑定 uniform `GlobalOpaque`），范围 0.0–2.0，默认 1.0；曝光 Exposure 也在同区段，默认 0.25。
 - 两个滑块均在 "渲染 Render" 折叠面板下，随帧更新 uniform，无需重启。
 
-### Task 5：Web Mercator 纬度反投影修正 + 极地限制去除
+### Task 5：极地星芒修复（真因 = convertLLAtoECEF 的 85.05° 硬截断）
 
-- 问题：原 `TileCallback::computeTileExtent()` 用线性插值计算瓦片纬度范围，Web Mercator 非线性导致高纬度瓦片拉伸。
-- 修复公式（`computeTileExtent`）：
-  ```cpp
-  // n = 2^z, row = tile y (origin depends on bottomLeft flag)
-  int rowTop = _bottomLeft ? (n - 1 - y) : y;
-  int rowBot = rowTop + 1;
-  double latTop = 2.0 * atan(exp(M_PI * (1.0 - 2.0 * rowTop / (double)n))) - M_PI / 2.0;
-  double latBot = 2.0 * atan(exp(M_PI * (1.0 - 2.0 * rowBot / (double)n))) - M_PI / 2.0;
-  ```
-  该公式为 Mercator Y 坐标（归一化 [0,1]）的精确反投影。
-- 同步去除 `convertLLAtoECEF` 中对纬度 ±85° 的 `clamp`；ECEF 转换本身在任意纬度数学上均有效，clamp 只会在极地附近引入人工误差。
+**重要纠正**：早先（commit 50f73d4c）以为"瓦片内部顶点按纬度线性插值、需要在 computeTileExtent 做墨卡托反投影"——**这个根因分析是错的**，按它改反而把全局贴图搞扭，已回退（47e0072e）。2026-06-18 重新用证据定位，真相如下。
+
+**顶点级墨卡托反投影其实早就正确**，藏在 `TileCallback::adjustLatitudeLongitudeAltitude`（TileCallback.cpp ~160）里：
+- TMS 瓦片的 extent‑Y（-90..90，每瓦片线性细分）本身就**线性于墨卡托 Y**：可证 `inDegrees(extentY) = mercY/2`（mercY = π(1−2·row/n)）。
+- adjust 里 `n2 = 2·latGuess = mercY`，`adjustedLat = atan(0.5·(eⁿ−e⁻ⁿ)) = atan(sinh(mercY))`，而 `atan(sinh(y)) ≡ 2·atan(eʸ)−π/2`（Gudermannian）。
+- 所以**每个顶点的纬度已是精确反投影**，无需改 computeTileExtent。验证：45°N 低 zoom（全欧洲）海岸线比例正确、无纵向压缩。
+
+**极点星芒的真因**：`Coordinate::convertLLAtoECEF`（modeling/Math.cpp:430）有个 `polarThreshold = inDegrees(85.05)` 的硬截断，把 lat>85.05° 的点 snap 到 (0,0,±radiusPolar)。而最顶瓦片顶边 = `atan(sinh(π))` = **85.0511°**，刚好略超阈值 → 整顶行 16 个顶点全坍缩到同一极点 → 扇形星芒/风车。
+- **修复**：删掉该截断的两行 `if (latitude > polarThreshold) ...`。闭式公式在极点本就精确（cos_latitude=0 → x=y=0, z=±(radiusPolar+height)），截断纯属冗余且制造伪影。
+- 效果：星芒消失，极冠变成干净圆盘；<85° 区域（全球/中纬/高纬陆地）完全无回归——因为截断本来只在 >85.05° 触发。
+- **遗留（已知限制）**：Web Mercator 没有 >85.05° 的瓦片数据，极冠是天然缺口（显示为平滑蓝盘），无法从该数据源贴图，只能另填色，本轮不做。
+- **验证铁律**：极地/投影类改动必须看**低 zoom 中纬度陆地**（如 --goto 45 12 6000 全欧洲）+ 极点正上方（--goto 89.5 0 5000），不能只看高 zoom（单瓦片跨度极小，gd 非线性可忽略，看不出问题）。

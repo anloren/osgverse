@@ -431,10 +431,12 @@ osg::Vec3d Coordinate::convertLLAtoECEF(const osg::Vec3d& lla, const WGS84& wgs8
 {
     // for details on maths see https://en.wikipedia.org/wiki/ECEF
     const double latitude = lla[0], longitude = lla[1], height = lla[2];
-    double sin_latitude = sin(latitude), cos_latitude = cos(latitude), polarThreshold = osg::inDegrees(85.05);
+    double sin_latitude = sin(latitude), cos_latitude = cos(latitude);
     double N = wgs84.radiusEquator / sqrt(1.0 - wgs84.eccentricitySq * sin_latitude * sin_latitude);
-    if (latitude > polarThreshold) return osg::Vec3d(0.0, 0.0, wgs84.radiusPolar + height);
-    else if (latitude < -polarThreshold) return osg::Vec3d(0.0, 0.0, -(wgs84.radiusPolar + height));
+    // Note: the closed-form below is already exact at the poles (cos_latitude == 0 yields
+    // x = y = 0, z = +/-(radiusPolar + height)), so no special-case polar clamp is needed.
+    // A clamp at +/-85.05deg used to collapse the top/bottom Web-Mercator tile row (lat 85.0511deg,
+    // just past the threshold) onto a single pole vertex, producing a pinwheel/star artifact.
     return osg::Vec3d((N + height) * cos_latitude * cos(longitude),
                       (N + height) * cos_latitude * sin(longitude),
                       (N * (1 - wgs84.eccentricitySq) + height) * sin_latitude);
