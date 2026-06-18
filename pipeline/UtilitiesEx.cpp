@@ -278,14 +278,18 @@ void EarthAtmosphereOcean::applyToGlobe(osg::StateSet* ss, osg::Texture* baseTex
     ss->setTextureAttributeAndModes(0, baseTex);
     ss->setTextureAttributeAndModes(1, maskTex);
     ss->setTextureAttributeAndModes(2, extraTex);
+    osg::Texture* overlay2Def = createDefaultTexture(osg::Vec4(0.0f, 0.0f, 0.0f, 0.0f));  // transparent default for unit 3
+    ss->setTextureAttributeAndModes(3, overlay2Def);
     ss->getOrCreateUniform("SceneSampler", osg::Uniform::INT)->set((int)0);
     ss->getOrCreateUniform("MaskSampler", osg::Uniform::INT)->set((int)1);
     ss->getOrCreateUniform("ExtraLayerSampler", osg::Uniform::INT)->set((int)2);
+    ss->getOrCreateUniform("Overlay2Sampler", osg::Uniform::INT)->set((int)3);
     ss->getOrCreateUniform("UvOffset1", osg::Uniform::FLOAT_VEC4)->set(osg::Vec4(0.0f, 0.0f, 1.0f, 1.0f));
     ss->getOrCreateUniform("UvOffset2", osg::Uniform::FLOAT_VEC4)->set(osg::Vec4(0.0f, 0.0f, 1.0f, 1.0f));
     ss->getOrCreateUniform("UvOffset3", osg::Uniform::FLOAT_VEC4)->set(osg::Vec4(0.0f, 0.0f, 1.0f, 1.0f));
+    ss->getOrCreateUniform("UvOffset4", osg::Uniform::FLOAT_VEC4)->set(osg::Vec4(0.0f, 0.0f, 1.0f, 1.0f));
 
-    osg::Program* program = apply(ss, vs, fs, 3, ref);
+    osg::Program* program = apply(ss, vs, fs, 4, ref);  // atmosphere samplers move to units 4-7, freeing unit 3 for Overlay2
     program->addBindAttribLocation("osg_GlobeData", GLOBE_ATTRIBUTE_INDEX);  // for computing ocean plane
 }
 
@@ -502,6 +506,7 @@ bool EarthAtmosphereOcean::create(osg::Texture* tr, osg::Texture* ir, osg::Textu
     commonUniforms["UnderOcean"] = new osg::Uniform("UnderOcean", 1.0f);
     commonUniforms["HdrExposure"] = new osg::Uniform("HdrExposure", 0.25f);
     commonUniforms["LabelOpacity"] = new osg::Uniform("LabelOpacity", 1.0f);
+    commonUniforms["Overlay2Opacity"] = new osg::Uniform("Overlay2Opacity", 0.0f);
 
     oceanUniforms["ScreenSize"] = new osg::Uniform("ScreenSize", osg::Vec2(1920.0f, 1080.0f));
     oceanUniforms["CameraToOcean"] = new osg::Uniform("CameraToOcean", osg::Matrixf());
