@@ -22,6 +22,7 @@
 #include <VerseCommon.h>
 #include <iostream>
 #include <sstream>
+#include <ctime>
 
 #ifdef OSG_LIBRARY_STATIC
 USE_OSG_PLUGINS()
@@ -204,6 +205,21 @@ static std::string createCustomPath(int type, const std::string& prefix, int x, 
         static const std::string googleLabels = "https://mt1.google.com/vt/lyrs=h&x={x}&y={y}&z={z}";
         return osgVerse::TileCallback::createPath(googleLabels, x, yXYZ, z);
     }
+    else if (type == osgVerse::TileCallback::OVERLAY)
+    {
+        if (z > 9) return "";  // GIBS GoogleMapsCompatible_Level9 max zoom is 9; no data above
+        // GIBS 每日真彩马赛克约 2 天后才全球拼全；用 "default"(今天) 会大片 404 → 每帧重试网络风暴。
+        // 取「今天-2 天」(UTC) 的完整日期，只算一次（长时间运行不刷新；跨 UTC 午夜需重启刷新）。
+        static const std::string gibsDate = []() {
+            time_t t = time(NULL) - 2 * 86400; struct tm g; gmtime_r(&t, &g);
+            char buf[16]; strftime(buf, sizeof(buf), "%Y-%m-%d", &g); return std::string(buf);
+        }();
+        std::string gibs =
+            "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/"
+            "MODIS_Terra_CorrectedReflectance_TrueColor/default/" + gibsDate +
+            "/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg";
+        return osgVerse::TileCallback::createPath(gibs, x, yXYZ, z);
+    }
     // OCEAN_MASK：仍用本地 mbtiles（TMS，不翻转），深层级丢弃
     if (z > 3) return "";
     return osgVerse::TileCallback::createPath(prefix, x, y, z);
@@ -233,6 +249,7 @@ int main(int argc, char** argv)
         // createCustomPath 里拼装——Google URL 含多个 '='，放这里会被 Options 解析截断。
         " Orthophoto=google"          // non-empty placeholder; real lyrs=s URL built in createCustomPath
         " User=googleLabels"          // non-empty placeholder; real lyrs=h URL built in createCustomPath
+        " Overlay=gibs"               // non-empty placeholder; real GIBS URL built in createCustomPath
         " Elevation=https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
         " OceanMask=mbtiles://" + mainFolder + "/Earth/Mask_lv3.mbtiles/{z}-{x}-{y}.tif"
         " ElevationEncoding=terrarium MaximumLevel=19 UseWebMercator=1 UseEarth3D=1 OriginBottomLeft=1"
@@ -320,10 +337,21 @@ int main(int argc, char** argv)
                 eptr->commonUniforms["LabelOpacity"]->set(v);
         };
         layerMgr.add(labels);
+
+        OverlayLayer clouds; clouds.id = "clouds"; clouds.displayName = u8"GIBS 影像/云图";
+        clouds.group = u8"影像 / 天气"; clouds.enabled = false; clouds.hasOpacity = true; clouds.opacity = 0.7f;
+        clouds.apply = [eptr](const OverlayLayer& l) {
+            float v = l.enabled ? l.opacity : 0.0f;
+            if (eptr->commonUniforms.count("Overlay2Opacity"))
+                eptr->commonUniforms["Overlay2Opacity"]->set(v);
+        };
+        layerMgr.add(clouds);
     }
     // 同步初始状态到 uniform（apply 只在交互时触发，这里推一次初值）
     if (OverlayLayer* lbl = layerMgr.find("labels"))
         layerMgr.setEnabled("labels", lbl->enabled);
+    if (OverlayLayer* cl = layerMgr.find("clouds"))
+        layerMgr.setEnabled("clouds", cl->enabled);  // default off → Overlay2Opacity stays 0
 
     // ImGui 控制面板 — 挂到最终 HUD 相机（cameras[3]），确保在地球图像之上绘制
     osg::ref_ptr<osgVerse::ImGuiManager> imgui = new osgVerse::ImGuiManager;
