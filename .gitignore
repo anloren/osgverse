@@ -51,3 +51,6 @@ sdk*/
 *.log
 dist/
 earth_cache/
+
+# Superpowers brainstorm visual-companion artifacts
+.superpowers/
