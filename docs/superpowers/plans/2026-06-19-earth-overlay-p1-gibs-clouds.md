@@ -8,11 +8,12 @@
 
 **Tech Stack:** C++ / OpenSceneGraph (CORE/GL4.1) / osgVerse / GLSL / NASA GIBS WMTS。
 
-**GIBS 源（已实测 200/jpeg）：**
+**GIBS 源（已实测）：**
 ```
-https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/default/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg
+https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/<DATE>/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg
 ```
-- EPSG:3857（与现有 Google 瓦片同方案，用 yXYZ 翻转行）；`time=default` 自动取最新（无需算日期）；jpg；**最大 z9**（>z9 无数据，createCustomPath 返回 "" 截断）。免 key、可缓存。MODIS Terra 可一行换成 `VIIRS_SNPP_CorrectedReflectance_TrueColor` 等。
+- EPSG:3857（与现有 Google 瓦片同方案，用 yXYZ 翻转行）；jpg；**最大 z9**（>z9 无数据，createCustomPath 返回 "" 截断）。免 key、可缓存。MODIS Terra 可一行换成 `VIIRS_SNPP_CorrectedReflectance_TrueColor` 等。
+- **`<DATE>` 不能用 `default`**：实测 `time=default`（=今天 UTC）的每日全球马赛克尚未拼全，大片瓦片 404，DEFERRED 每帧重试 → 网络风暴、抓不到截图。MODIS Terra 约 **2 天**后才全球完整（curl 实测：今天/昨天某些瓦片 404，前天全 200）。故用 `<DATE> = (UTC 今天 − 2 天)`，运行时算一次（static）。VIIRS default 也有今日缺口，同样需用滞后日期。
 
 **验证方式：** 无单元测试，用无头截图。构建：`cmake --build /Users/franklee/osgverse/build/verse_core --target install --config Release`。截图模板见下，`EARTH_AUTOCAP` ≤ ~650。
 
@@ -259,10 +260,15 @@ git commit -m "feat(earth): plumb OVERLAY layer through TMS plugin (texUnit 3)"
     else if (type == osgVerse::TileCallback::OVERLAY)
     {
         if (z > 9) return "";  // GIBS GoogleMapsCompatible_Level9 最大 z9，超出无数据
-        static const std::string gibs =
+        // time=default(今天) 马赛克未拼全 → 404 风暴；用 UTC 今天-2 天的完整日期，算一次（重启刷新）
+        static const std::string gibsDate = []() {
+            time_t t = time(NULL) - 2 * 86400; struct tm g; gmtime_r(&t, &g);
+            char buf[16]; strftime(buf, sizeof(buf), "%Y-%m-%d", &g); return std::string(buf);
+        }();
+        std::string gibs =
             "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/"
-            "MODIS_Terra_CorrectedReflectance_TrueColor/default/default/"
-            "GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg";
+            "MODIS_Terra_CorrectedReflectance_TrueColor/default/" + gibsDate +
+            "/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg";
         return osgVerse::TileCallback::createPath(gibs, x, yXYZ, z);
     }
 ```
