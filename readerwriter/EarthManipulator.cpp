@@ -9,7 +9,7 @@ static double g_distanceToCenter = 0.0;
 
 EarthManipulator::EarthManipulator()
 :   _viewer(NULL), _latestLatitude(0.0), _latestLongitude(0.0), _latestAltitude(0.0),
-    _tilt(0.0f), _throwAllowed(true), _thrown(false), _locked(false)
+    _tilt(0.0f), _throwAllowed(true), _thrown(false), _locked(false), _minDistance(50.0)
 {
     _tiltCenter.set(0.0, 0.0, -DBL_MAX);
     _rotateAxis.set(0.0, 0.0, -DBL_MAX);
@@ -129,6 +129,7 @@ void EarthManipulator::setByEye(const osg::Vec3d& eye, float doa)
 
     _worldRotation = _worldRotation * new_rotate;
     _distance = new_distance;
+    clampDistance();
 
     // 跳转到目标后正下方俯视（tilt=0），便于直接看清地面细节。
     calcTiltCenter(false);
@@ -541,9 +542,11 @@ bool EarthManipulator::calcScrollingMotion(osgGA::GUIEventAdapter::ScrollingMoti
     {
     case osgGA::GUIEventAdapter::SCROLL_UP:
         _distance /= scrollScale * _zoomFactor[0];
+        clampDistance();
         return true;
     case osgGA::GUIEventAdapter::SCROLL_DOWN:
         _distance *= scrollScale * _zoomFactor[1];
+        clampDistance();
         return true;
     default:
         return false;

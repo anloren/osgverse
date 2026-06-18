@@ -72,6 +72,14 @@ namespace osgVerse
         void setZoomFactor(const osg::Vec2& zoom) { _zoomFactor = zoom; }
         const osg::Vec2& getZoomFactor() const { return _zoomFactor; }
 
+        /** Clamp a distance value to be at least minDist */
+        static double clampDistanceValue(double dist, double minDist)
+        { return (dist < minDist) ? minDist : dist; }
+
+        /** Set/get the minimum allowed camera-to-surface distance (default 50 m) */
+        void setMinDistance(double d) { _minDistance = d; }
+        double getMinDistance() const { return _minDistance; }
+
         /** Set if all user operations are locked */
         void setLocked(bool locked) { _locked = locked; }
         bool getLocked() const { return _locked; }
@@ -181,7 +189,11 @@ namespace osgVerse
         void performRotateAxis(double x0, double y0);
         void performScale(osgGA::GUIEventAdapter::ScrollingMotion scrollMotion) { calcScrollingMotion(scrollMotion); }
         void performScale(double x0, double y0, double dx, double dy)
-        { if (dy < 0.0) _distance *= (1.0 + dy * _zoomFactor[0]); else _distance *= (1.0 + dy * _zoomFactor[1]); }
+        {
+            if (dy < 0.0) _distance *= (1.0 + dy * _zoomFactor[0]);
+            else _distance *= (1.0 + dy * _zoomFactor[1]);
+            clampDistance();
+        }
 
     protected:
         virtual ~EarthManipulator();
@@ -231,6 +243,12 @@ namespace osgVerse
             rot.makeRotate(angle, axis);
         }
 
+        void clampDistance()
+        {
+            _distance = clampDistanceValue(_distance, _minDistance);
+            if (_animationDistance < _minDistance) _animationDistance = _minDistance;
+        }
+
         osg::ref_ptr<osg::Node> _node;
         osg::ref_ptr<osg::Node> _world;
         osg::ref_ptr<const osgGA::GUIEventAdapter> _ga_t0;  // Current event
@@ -253,6 +271,7 @@ namespace osgVerse
         osg::Vec2 _zoomFactor;  // Zoom-in/out factor to control scaling speed
         double _latestLatitude, _latestLongitude, _latestAltitude;
         double _distance;  // Distance between eye and view point
+        double _minDistance;  // Minimum allowed distance to prevent camera going below surface
         float _tilt;  // Vertical angle to the horizon
 
         unsigned int _intersectionMask;  // Mask for intersection with the earth
