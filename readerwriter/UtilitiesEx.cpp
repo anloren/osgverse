@@ -18,6 +18,8 @@
 #include <sstream>
 #include <iomanip>
 #include <cctype>
+#include <fstream>
+#include <functional>
 
 #include "pipeline/Global.h"
 #include "pipeline/Utilities.h"
@@ -491,6 +493,20 @@ namespace osgVerse
         return yuvData;
     }
 
+    static std::string tileCacheDir()
+    {
+        const char* env = getenv("EARTH_TILE_CACHE");
+        if (env && env[0]) return std::string(env);
+        const char* home = getenv("HOME");
+        return std::string(home ? home : ".") + "/.osgverse_earth_cache";
+    }
+    static std::string tileCacheFile(const std::string& url)
+    {
+        std::hash<std::string> h; char buf[32];
+        snprintf(buf, sizeof(buf), "%016llx", (unsigned long long)h(url));
+        return tileCacheDir() + "/" + std::string(buf) + ".tile";
+    }
+
     std::vector<unsigned char> loadFileData(const std::string& url, std::string& mimeType, std::string& encodingType,
                                             const std::vector<std::string>& reqHeaders)
     {
@@ -517,6 +533,22 @@ namespace osgVerse
                 else if (key == "content-encoding") encodingType = trimString(wf->resHeaders[i + 1]);
             }
 #else
+            std::string cf = tileCacheFile(url);
+            {
+                std::ifstream cin(cf.c_str(), std::ios::binary);
+                if (cin)
+                {
+                    std::string s((std::istreambuf_iterator<char>(cin)), std::istreambuf_iterator<char>());
+                    if (!s.empty())
+                    {
+                        std::ifstream minf((cf + ".mime").c_str());
+                        if (minf) std::getline(minf, mimeType);
+                        buffer.resize(s.size()); memcpy(buffer.data(), s.data(), s.size());
+                        return buffer;
+                    }
+                }
+            }
+
             HttpRequest req; req.method = HTTP_GET;
             req.url = osgVerse::WebAuxiliary::normalizeUrl(url); req.scheme = scheme;
             req.headers["User-Agent"] = "Mozilla/5.0"; req.headers["Accept"] = "*/*";
@@ -566,6 +598,14 @@ namespace osgVerse
                 std::transform(key.begin(), key.end(), key.begin(), tolower);
                 if (key == "content-type") mimeType = trimString(itr->second);
                 else if (key == "content-encoding") encodingType = trimString(itr->second);
+            }
+
+            if (!buffer.empty())
+            {
+                osgDB::makeDirectory(tileCacheDir());
+                std::ofstream out(cf.c_str(), std::ios::binary);
+                if (out) out.write((const char*)buffer.data(), buffer.size());
+                std::ofstream mo((cf + ".mime").c_str()); if (mo) mo << mimeType;
             }
 #endif
         }
