@@ -198,7 +198,12 @@ static std::string createCustomPath(int type, const std::string& prefix, int x, 
         return osgVerse::TileCallback::createPath(google, x, yXYZ, z);
     }
     else if (type == osgVerse::TileCallback::ELEVATION)
+    {
+        // AWS Terrarium 高程最高约 z15；z>15 请求必 404，会在主线程 DEFERRED 重试阻塞（近地卡顿元凶之一）
+        // 且刷屏 404。截断后深层瓦片自动复用父级 z15 高程（findAndUseParentData），地形不丢。
+        if (z > 15) return "";
         return osgVerse::TileCallback::createPath(prefix, x, yXYZ, z);
+    }
     else if (type == osgVerse::TileCallback::USER)
     {
         // Google 透明标注层（路网 + 地名），与底图同瓦片方案，叠在 ExtraLayer(unit2)
