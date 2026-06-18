@@ -128,3 +128,49 @@ int yXYZ = (1 << z) - 1 - y;  // == 2^z - 1 - y
 - 根因：Info.plist 里 `NSHighResolutionCapable=true` 让全屏窗口拿到 2× 像素后备缓冲（4K 屏 3840×2160），而 osgVerse 地球管线 RTT 按窗口点数 1920×1080 建，合成只落在子区域。`getScreenResolution` 返回点数 1920×1080。
 - 修复：`packaging/package_macos.sh` 的 Info.plist 设 `NSHighResolutionCapable=false`，drawable 变 1920×1080 与 RTT 一致，再由窗口服务放大铺满全屏。代价：Retina 上是 1× 放大（略软），但填满；在线高清瓦片仍提供细节。
 - 验证：`open` 启动 → `osascript` 置前 → `screencapture -x`（本机已授予屏幕录制权限时可用）读全桌面，确认铺满。
+
+---
+
+## feature/earth-improvements 功能记录（Tasks 1-5）
+
+本节记录 Tasks 1-5 在 EarthExplorer 上实现的五项改进的关键技术细节，供后续维护参考。
+
+### Task 1：磁盘瓦片缓存（on-disk tile cache）
+
+- 实现文件：`readerwriter/TileCallback.cpp`，`loadFileData()` 函数。
+- 缓存目录：`~/.osgverse_earth_cache`（可用环境变量 `EARTH_TILE_CACHE` 覆盖，支持 `~` 展开）。
+- 逻辑：先查本地缓存文件（`<dir>/<hostname>/<path_with_slashes_replaced>.bin`），命中则直接读取；未命中则走 `osgDB::readImageFile()` 网络拉取，成功后写入缓存，下次直接离线可用。
+- 注意：写缓存时先创建父目录（`mkdir -p` 语义），并用临时文件 `+.tmp` 原子替换，防止写到一半的文件被读取。
+
+### Task 2：相机最小距离限制（_minDistance 50 m）
+
+- 实现文件：`applications/earth_explorer/EarthManipulator.h`（或 `.cpp`）。
+- 改动点：在 `EarthManipulator` 的距离更新逻辑中，设 `_minDistance = 50.0`（米）并在每帧 `clampDistance()` 时执行 `_distance = std::max(_distance, _minDistance)`。
+- 效果：用户滚轮缩放无法穿透地表，避免相机进入地下导致地形翻转/剔除失效的视觉错误。
+
+### Task 3：真实时间太阳（Real-time Solar Position）
+
+- 新增文件：`readerwriter/SolarPosition.h`。
+  - 包含 NOAA 日面算法（Julian Day → 平黄经 → 真近点角 → 赤纬/时角），函数 `computeSunDirectionECEF(utcUnixTime, lon_rad, lat_rad)` 返回太阳方向的 ECEF 单位向量（`+X` 指向 lon=0 赤道方向，与瓦片 `convertLLAtoECEF` 约定一致）。
+- UI：`applications/earth_explorer/EarthControlUI.h`，"太阳 Sun" 面板新增 "真实时间太阳 Real-time" 复选框；勾选后读取系统时钟（`std::time(nullptr)`），也可手动输入 UTC 日期时间字段覆盖。
+- 每帧通过 `commonUniforms["WorldSunDir"]->set(sunDir)` 将 ECEF 太阳向量注入 osgVerse 大气/光照着色器。
+
+### Task 4：全球着色器饱和度/对比度 + 大气强度滑块
+
+- 全球色调改进：`pipeline/ShaderLibrary.cpp` 或 `glsl/` 对应片元着色器，调整饱和度/对比度系数，使正午着色更鲜明、暗部不过黑。
+- UI 新增 "大气强度 Atmosphere" 滑块（绑定 uniform `GlobalOpaque`），范围 0.0–2.0，默认 1.0；曝光 Exposure 也在同区段，默认 0.25。
+- 两个滑块均在 "渲染 Render" 折叠面板下，随帧更新 uniform，无需重启。
+
+### Task 5：Web Mercator 纬度反投影修正 + 极地限制去除
+
+- 问题：原 `TileCallback::computeTileExtent()` 用线性插值计算瓦片纬度范围，Web Mercator 非线性导致高纬度瓦片拉伸。
+- 修复公式（`computeTileExtent`）：
+  ```cpp
+  // n = 2^z, row = tile y (origin depends on bottomLeft flag)
+  int rowTop = _bottomLeft ? (n - 1 - y) : y;
+  int rowBot = rowTop + 1;
+  double latTop = 2.0 * atan(exp(M_PI * (1.0 - 2.0 * rowTop / (double)n))) - M_PI / 2.0;
+  double latBot = 2.0 * atan(exp(M_PI * (1.0 - 2.0 * rowBot / (double)n))) - M_PI / 2.0;
+  ```
+  该公式为 Mercator Y 坐标（归一化 [0,1]）的精确反投影。
+- 同步去除 `convertLLAtoECEF` 中对纬度 ±85° 的 `clamp`；ECEF 转换本身在任意纬度数学上均有效，clamp 只会在极地附近引入人工误差。
