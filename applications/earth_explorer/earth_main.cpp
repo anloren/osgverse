@@ -218,6 +218,9 @@ int main(int argc, char** argv)
     bool cityWaitingTiles = true, manipulatorCanThrow = false;
     if (arguments.read("--no-wait")) cityWaitingTiles = false;
     if (arguments.read("--thrown")) manipulatorCanThrow = true;
+    // 启动即跳转到指定经纬度+高度（度, 度, 千米），便于直接查看街道级瓦片
+    double gotoLat = 1.0e9, gotoLon = 0.0, gotoAltKm = 0.0;
+    arguments.read("--goto", gotoLat, gotoLon, gotoAltKm);
 
     // Create earth
     std::string earthURLs =
@@ -277,7 +280,13 @@ int main(int argc, char** argv)
 
     osgDB::DatabasePager* pager = new osgDB::DatabasePager;
     pager->setDrawablePolicy(osgDB::DatabasePager::USE_VERTEX_BUFFER_OBJECTS);
-    pager->setDoPreCompile(true); pager->setUpThreads(6, 3);
+    // Online satellite/elevation tiles are fetched synchronously over HTTPS on the
+    // pager's HTTP threads. Each deeper LOD level needs ~4x as many tiles, so tile
+    // streaming throughput is the bottleneck for drilling down to street level.
+    // Give the pager many more HTTP threads so tiles load in parallel (combined with
+    // keep-alive connection reuse in loadFileData) instead of trickling in one host
+    // round-trip at a time.
+    pager->setDoPreCompile(true); pager->setUpThreads(20, 16);
 
     viewer.addEventHandler(new EnvironmentHandler(&earthRenderingUtils, mainFolder));
     viewer.addEventHandler(new osgViewer::StatsHandler);
@@ -298,6 +307,9 @@ int main(int argc, char** argv)
     int screenNo = 0; arguments.read("--screen", screenNo);
     viewer.setUpViewOnSingleScreen(screenNo);
 
+    if (gotoLat < 1.0e8)  // --goto 指定了起始视点
+        earthManipulator->setByEye(osg::inDegrees(gotoLat), osg::inDegrees(gotoLon), gotoAltKm * 1000.0);
+
     // Headless auto-capture: render a fixed number of frames (letting the database
     // pager stream tiles) then grab the GL framebuffer to a PNG. Used to verify the
     // earth renders without relying on OS screen-capture permissions.
@@ -317,6 +329,10 @@ int main(int argc, char** argv)
         // is visible in the capture. EARTH_SUN_TO_CAMERA=1 (or -1 to flip sign).
         const char* sunCam = getenv("EARTH_SUN_TO_CAMERA");
         float sunSign = (sunCam && atof(sunCam) < 0.0) ? -1.0f : 1.0f;
+        // Optional per-frame delay (ms) so the database pager has real wall-clock
+        // time to stream deep online tiles before the capture frame.
+        const char* fsleep = getenv("EARTH_FRAME_SLEEP_MS");
+        int frameSleepMs = fsleep ? atoi(fsleep) : 0;
         if (!viewer.isRealized()) viewer.realize();
         for (int i = 0; i < total && !viewer.done(); ++i)
         {
@@ -328,6 +344,7 @@ int main(int argc, char** argv)
                 earthRenderingUtils.commonUniforms["WorldSunDir"]->set(dir);
             }
             viewer.frame();
+            if (frameSleepMs > 0) OpenThreads::Thread::microSleep((unsigned int)frameSleepMs * 1000);
             if (i == total - 5) capturer->captureNextFrame(viewer);
         }
         viewer.frame();  // flush the pending capture

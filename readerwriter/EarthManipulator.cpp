@@ -130,9 +130,9 @@ void EarthManipulator::setByEye(const osg::Vec3d& eye, float doa)
     _worldRotation = _worldRotation * new_rotate;
     _distance = new_distance;
 
-    // Should a little tilt be good?
+    // 跳转到目标后正下方俯视（tilt=0），便于直接看清地面细节。
     calcTiltCenter(false);
-    _tilt = osg::PI_4;
+    _tilt = 0.0;
     makeTiltRotation(_tiltRotation, _tilt, osg::X_AXIS);
 }
 
@@ -536,7 +536,7 @@ bool EarthManipulator::calcDoubleClickMotion(const osgGA::GUIEventAdapter& ea)
 bool EarthManipulator::calcScrollingMotion(osgGA::GUIEventAdapter::ScrollingMotion scrollMotion)
 {
     if (_locked) return false;
-    const float scrollScale = 1.05f;
+    const float scrollScale = 1.15f;
     switch (scrollMotion)
     {
     case osgGA::GUIEventAdapter::SCROLL_UP:
