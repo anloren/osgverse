@@ -18,6 +18,7 @@
 #include <readerwriter/FileCache.h>
 #include <pipeline/Pipeline.h>
 #include "EarthControlUI.h"
+#include "LayerManager.h"
 #include <VerseCommon.h>
 #include <iostream>
 #include <sstream>
@@ -303,10 +304,33 @@ int main(int argc, char** argv)
     viewer.setSceneData(root.get());
     //viewer.setThreadingModel(osgViewer::Viewer::SingleThreaded);
 
+    // 图层注册（P0：底图 + 标注）
+    LayerManager layerMgr;
+    {
+        OverlayLayer base; base.id = "base"; base.displayName = u8"卫星影像";
+        base.group = u8"底图 / 标注"; base.enabled = true; base.hasOpacity = false;
+        layerMgr.add(base);   // 基础底图，常开、无开关动作
+
+        OverlayLayer labels; labels.id = "labels"; labels.displayName = u8"路网·地名";
+        labels.group = u8"底图 / 标注"; labels.enabled = true; labels.hasOpacity = true; labels.opacity = 1.0f;
+        osgVerse::EarthAtmosphereOcean* eptr = &earthRenderingUtils;
+        labels.apply = [eptr](const OverlayLayer& l) {
+            float v = l.enabled ? l.opacity : 0.0f;
+            if (eptr->commonUniforms.count("LabelOpacity"))
+                eptr->commonUniforms["LabelOpacity"]->set(v);
+        };
+        layerMgr.add(labels);
+    }
+    // 同步初始状态到 uniform（apply 只在交互时触发，这里推一次初值）
+    if (OverlayLayer* lbl = layerMgr.find("labels"))
+        layerMgr.setEnabled("labels", lbl->enabled);
+
     // ImGui 控制面板 — 挂到最终 HUD 相机（cameras[3]），确保在地球图像之上绘制
     osg::ref_ptr<osgVerse::ImGuiManager> imgui = new osgVerse::ImGuiManager;
     imgui->setChineseSimplifiedFont(MISC_DIR + std::string("LXGWFasmartGothic.otf"));
-    imgui->initialize(new EarthControlUI(earthManipulator.get(), &earthRenderingUtils, &viewer), false);
+    EarthControlUI* ctrlUI = new EarthControlUI(earthManipulator.get(), &earthRenderingUtils, &viewer);
+    ctrlUI->_layers = &layerMgr;
+    imgui->initialize(ctrlUI, false);
     imgui->addToView(&viewer, cameras[3]);  // cameras[3] = finalCamera (HUD, renders to screen)
 
     int screenNo = 0; arguments.read("--screen", screenNo);

@@ -11,6 +11,7 @@
 #include <pipeline/Utilities.h>
 #include <readerwriter/SolarPosition.h>
 #include <modeling/Math.h>
+#include "LayerManager.h"
 
 // EarthExplorer 的 ImGui 控制面板。直接驱动 EarthManipulator 与 EarthAtmosphereOcean，
 // 不经 USER 事件中转。
@@ -19,6 +20,7 @@ struct EarthControlUI : public osgVerse::ImGuiContentHandler
     osgVerse::EarthManipulator* _mani;
     osgVerse::EarthAtmosphereOcean* _earth;
     osgViewer::Viewer* _viewer;                      // 用于退出程序
+    LayerManager* _layers = nullptr;   // 由 main 注入
     float _sunAz, _sunEl;     // 太阳方位角/高度角（度）
     float _exposure;          // HDR 曝光
     float _globalOpaque;      // 大气强度
@@ -111,6 +113,41 @@ struct EarthControlUI : public osgVerse::ImGuiContentHandler
                     _earth->commonUniforms["HdrExposure"]->set(_exposure);
                 if (ImGui::SliderFloat(u8"大气强度 Atmosphere", &_globalOpaque, 0.0f, 1.0f, "%.2f"))
                     _earth->commonUniforms["GlobalOpaque"]->set(_globalOpaque);
+            }
+            // ---- 图层 ----
+            if (_layers && ImGui::CollapsingHeader(u8"图层 Layers", ImGuiTreeNodeFlags_DefaultOpen))
+            {
+                std::string curGroup; bool groupOpen = false;
+                std::vector<OverlayLayer>& ls = _layers->layers();
+                for (size_t i = 0; i < ls.size(); ++i)
+                {
+                    OverlayLayer& l = ls[i];
+                    if (l.group != curGroup)   // 新分类 → 开一个可折叠子树（方案 B）
+                    {
+                        if (groupOpen) ImGui::TreePop();
+                        curGroup = l.group;
+                        groupOpen = ImGui::TreeNodeEx(l.group.c_str(),
+                            (l.group == u8"底图 / 标注") ? ImGuiTreeNodeFlags_DefaultOpen : 0);
+                    }
+                    if (!groupOpen) continue;
+                    ImGui::PushID((int)i);
+                    // needsKey（缺 key）或无 apply 回调（如常开底图）的层置灰、不可交互
+                    bool inactive = l.needsKey || !l.apply;
+                    if (inactive) ImGui::BeginDisabled();
+                    bool en = l.enabled;
+                    if (ImGui::Checkbox(l.displayName.c_str(), &en)) _layers->setEnabled(l.id, en);
+                    if (l.needsKey) { ImGui::SameLine(); ImGui::TextDisabled(u8"🔑"); }
+                    if (l.hasOpacity && l.enabled)
+                    {
+                        float op = l.opacity;
+                        // 标签带层名，避免多个透明度滑块同名混淆
+                        if (ImGui::SliderFloat((l.displayName + u8" 透明度").c_str(), &op, 0.0f, 1.0f, "%.2f"))
+                            _layers->setOpacity(l.id, op);
+                    }
+                    if (inactive) ImGui::EndDisabled();
+                    ImGui::PopID();
+                }
+                if (groupOpen) ImGui::TreePop();
             }
             // ---- 跳转 ----
             if (ImGui::CollapsingHeader(u8"跳转 Go To", ImGuiTreeNodeFlags_DefaultOpen))
