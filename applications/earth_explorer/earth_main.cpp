@@ -192,13 +192,17 @@ static std::string createCustomPath(int type, const std::string& prefix, int x, 
     {
         // Google 混合瓦片（lyrs=y：卫星影像 + 道路/地名标注）。URL 含 '='/'&'，
         // osgDB::Options 解析会把多 '=' 的值截断，所以在这里硬编码而非放进 earthURLs。
-        static const std::string google = "https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}";
+        static const std::string google = "https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}";
         return osgVerse::TileCallback::createPath(google, x, yXYZ, z);
     }
     else if (type == osgVerse::TileCallback::ELEVATION)
         return osgVerse::TileCallback::createPath(prefix, x, yXYZ, z);
     else if (type == osgVerse::TileCallback::USER)
-        return osgVerse::TileCallback::createPath(prefix, x, yXYZ, z);
+    {
+        // Google 透明标注层（路网 + 地名），与底图同瓦片方案，叠在 ExtraLayer(unit2)
+        static const std::string googleLabels = "https://mt1.google.com/vt/lyrs=h&x={x}&y={y}&z={z}";
+        return osgVerse::TileCallback::createPath(googleLabels, x, yXYZ, z);
+    }
     // OCEAN_MASK：仍用本地 mbtiles（TMS，不翻转），深层级丢弃
     if (z > 3) return "";
     return osgVerse::TileCallback::createPath(prefix, x, y, z);
@@ -226,7 +230,8 @@ int main(int argc, char** argv)
     std::string earthURLs =
         // Orthophoto 值仅为占位符（非空即启用影像层）；真实 Google 混合瓦片 URL 在
         // createCustomPath 里拼装——Google URL 含多个 '='，放这里会被 Options 解析截断。
-        " Orthophoto=google"
+        " Orthophoto=google"          // non-empty placeholder; real lyrs=s URL built in createCustomPath
+        " User=googleLabels"          // non-empty placeholder; real lyrs=h URL built in createCustomPath
         " Elevation=https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
         " OceanMask=mbtiles://" + mainFolder + "/Earth/Mask_lv3.mbtiles/{z}-{x}-{y}.tif"
         " ElevationEncoding=terrarium MaximumLevel=19 UseWebMercator=1 UseEarth3D=1 OriginBottomLeft=1"
