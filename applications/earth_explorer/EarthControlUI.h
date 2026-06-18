@@ -2,12 +2,15 @@
 #define EARTH_CONTROL_UI_H
 
 #include <cmath>
+#include <ctime>
 #include <osg/Vec3d>
 #include <osgViewer/Viewer>
 #include <ui/ImGui.h>
 #include <ui/ImGuiComponents.h>
 #include <readerwriter/EarthManipulator.h>
 #include <pipeline/Utilities.h>
+#include <readerwriter/SolarPosition.h>
+#include <modeling/Math.h>
 
 // EarthExplorer 的 ImGui 控制面板。直接驱动 EarthManipulator 与 EarthAtmosphereOcean，
 // 不经 USER 事件中转。
@@ -21,10 +24,13 @@ struct EarthControlUI : public osgVerse::ImGuiContentHandler
     bool  _ocean;             // 海洋开关
     float _gotoLat, _gotoLon, _gotoAltKm;            // 跳转目标
     int   _bookmarkTime;                             // 下一个书签的时间戳（帧）
+    bool _realTimeSun, _followClock;
+    int  _year, _month, _day; float _utcHour;
 
     EarthControlUI(osgVerse::EarthManipulator* m, osgVerse::EarthAtmosphereOcean* e, osgViewer::Viewer* v)
         : _mani(m), _earth(e), _viewer(v), _sunAz(0.0f), _sunEl(0.0f), _exposure(0.25f), _ocean(true)
-        , _gotoLat(35.36f), _gotoLon(138.73f), _gotoAltKm(50.0f), _bookmarkTime(0) {}
+        , _gotoLat(35.36f), _gotoLon(138.73f), _gotoAltKm(50.0f), _bookmarkTime(0)
+        , _realTimeSun(false), _followClock(true), _year(2024), _month(6), _day(21), _utcHour(18.0f) {}
 
     void updateSun()
     {
@@ -33,10 +39,27 @@ struct EarthControlUI : public osgVerse::ImGuiContentHandler
         _earth->commonUniforms["WorldSunDir"]->set(dir);
     }
 
+    void applyRealtimeSun()
+    {
+        int Y=_year, Mo=_month, D=_day; double H=_utcHour;
+        if (_followClock)
+        {
+            time_t t = time(NULL); struct tm g; gmtime_r(&t, &g);
+            Y=g.tm_year+1900; Mo=g.tm_mon+1; D=g.tm_mday;
+            H = g.tm_hour + g.tm_min/60.0 + g.tm_sec/3600.0;
+        }
+        osgVerse::SubsolarPoint s = osgVerse::computeSubsolarPoint(Y, Mo, D, H);
+        osg::Vec3d ecef = osgVerse::Coordinate::convertLLAtoECEF(
+            osg::Vec3d(s.declRad, s.lonRad, 6.371e6));
+        ecef.normalize();
+        _earth->commonUniforms["WorldSunDir"]->set(osg::Vec3(ecef));
+    }
+
     virtual void runInternal(osgVerse::ImGuiManager* mgr)
     {
         ImFont* font = ImGuiFonts.count("LXGWFasmartGothic") ? ImGuiFonts["LXGWFasmartGothic"] : NULL;
         if (font) ImGui::PushFont(font);
+        if (_realTimeSun) applyRealtimeSun();
         ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);
         // 自适应内容高度，不出现滚动条
         if (ImGui::Begin("Earth Control / 地球控制台", NULL,
@@ -62,6 +85,19 @@ struct EarthControlUI : public osgVerse::ImGuiContentHandler
                     _sunAz = (float)osg::RadiansToDegrees(lla[1]);
                     _sunEl = (float)osg::RadiansToDegrees(lla[0]);
                     updateSun();
+                }
+                ImGui::Separator();
+                if (ImGui::Checkbox(u8"真实时间太阳 Real-time", &_realTimeSun)) { if (_realTimeSun) applyRealtimeSun(); }
+                if (_realTimeSun)
+                {
+                    ImGui::Checkbox(u8"跟随系统时钟", &_followClock);
+                    if (!_followClock)
+                    {
+                        ImGui::InputInt(u8"年 Year", &_year);
+                        ImGui::InputInt(u8"月 Month", &_month);
+                        ImGui::InputInt(u8"日 Day", &_day);
+                        ImGui::SliderFloat(u8"UTC 小时", &_utcHour, 0.0f, 24.0f, "%.1f");
+                    }
                 }
             }
 
