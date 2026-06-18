@@ -256,7 +256,17 @@ bool EarthManipulator::handle(const osgGA::GUIEventAdapter& ea, osgGA::GUIAction
         return true;
 
     case osgGA::GUIEventAdapter::SCROLL:
-        if (calcScrollingMotion(ea.getScrollingMotion())) us.requestRedraw();
+        {
+            osgGA::GUIEventAdapter::ScrollingMotion sm = ea.getScrollingMotion();
+            if (sm == osgGA::GUIEventAdapter::SCROLL_2D)
+            {   // macOS (trackpad / Magic Mouse / wheel) reports 2D scroll deltas
+                // instead of discrete up/down; map the vertical delta to zoom.
+                float dy = ea.getScrollingDeltaY();
+                if (dy > 0.0f) sm = osgGA::GUIEventAdapter::SCROLL_UP;
+                else if (dy < 0.0f) sm = osgGA::GUIEventAdapter::SCROLL_DOWN;
+            }
+            if (calcScrollingMotion(sm)) us.requestRedraw();
+        }
         return true;
 
     case osgGA::GUIEventAdapter::KEYDOWN:

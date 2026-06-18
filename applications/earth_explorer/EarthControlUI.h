@@ -3,6 +3,7 @@
 
 #include <cmath>
 #include <osg/Vec3d>
+#include <osgViewer/Viewer>
 #include <ui/ImGui.h>
 #include <ui/ImGuiComponents.h>
 #include <readerwriter/EarthManipulator.h>
@@ -14,14 +15,15 @@ struct EarthControlUI : public osgVerse::ImGuiContentHandler
 {
     osgVerse::EarthManipulator* _mani;
     osgVerse::EarthAtmosphereOcean* _earth;
+    osgViewer::Viewer* _viewer;                      // 用于退出程序
     float _sunAz, _sunEl;     // 太阳方位角/高度角（度）
     float _exposure;          // HDR 曝光
     bool  _ocean;             // 海洋开关
     float _gotoLat, _gotoLon, _gotoAltKm;            // 跳转目标
     int   _bookmarkTime;                             // 下一个书签的时间戳（帧）
 
-    EarthControlUI(osgVerse::EarthManipulator* m, osgVerse::EarthAtmosphereOcean* e)
-        : _mani(m), _earth(e), _sunAz(0.0f), _sunEl(0.0f), _exposure(0.25f), _ocean(true)
+    EarthControlUI(osgVerse::EarthManipulator* m, osgVerse::EarthAtmosphereOcean* e, osgViewer::Viewer* v)
+        : _mani(m), _earth(e), _viewer(v), _sunAz(0.0f), _sunEl(0.0f), _exposure(0.25f), _ocean(true)
         , _gotoLat(35.36f), _gotoLon(138.73f), _gotoAltKm(50.0f), _bookmarkTime(0) {}
 
     void updateSun()
@@ -36,8 +38,9 @@ struct EarthControlUI : public osgVerse::ImGuiContentHandler
         ImFont* font = ImGuiFonts.count("LXGWFasmartGothic") ? ImGuiFonts["LXGWFasmartGothic"] : NULL;
         if (font) ImGui::PushFont(font);
         ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(340, 480), ImGuiCond_FirstUseEver);
-        if (ImGui::Begin("Earth Control / 地球控制台"))
+        // 自适应内容高度，不出现滚动条
+        if (ImGui::Begin("Earth Control / 地球控制台", NULL,
+                         ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoScrollbar))
         {
             // ---- 相机读数 ----
             if (ImGui::CollapsingHeader(u8"相机 Camera", ImGuiTreeNodeFlags_DefaultOpen))
@@ -102,6 +105,11 @@ struct EarthControlUI : public osgVerse::ImGuiContentHandler
                 if (ImGui::Button(u8"停止 Stop")) _mani->stopAnimation(false);
                 if (ImGui::Button(u8"清空 Clear")) { _mani->clearControlPoints(); _bookmarkTime = 0; }
             }
+
+            // ---- 退出 ----
+            ImGui::Separator();
+            if (ImGui::Button(u8"退出程序 Quit", ImVec2(-1.0f, 0.0f)))
+                if (_viewer) _viewer->setDone(true);
         }
         ImGui::End();
         if (font) ImGui::PopFont();
