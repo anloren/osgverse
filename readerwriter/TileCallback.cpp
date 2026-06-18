@@ -529,7 +529,8 @@ osg::Texture* TileCallback::findAndUseParentData(LayerType id, osg::Group* paren
             {
             case ORTHOPHOTO: texUnit = 0; break;
             case OCEAN_MASK: texUnit = 1; break;
-            default: texUnit = 2; break;
+            case OVERLAY: texUnit = 3; break;
+            default: texUnit = 2; break;  // USER
             }
             if (texUnit >= 0) return static_cast<osg::Texture*>(
                 ss->getTextureAttribute(texUnit, osg::StateAttribute::TEXTURE));
@@ -554,6 +555,8 @@ bool TileCallback::updateLayerData(osg::NodeVisitor* nv, osg::Node* node, LayerT
         tex = createLayerImage(id, emptyPath, opt); texUnit = 0; break;
     case OCEAN_MASK:
         tex = createLayerImage(id, emptyPath, opt); texUnit = 1; break;
+    case OVERLAY:
+        tex = createLayerImage(id, emptyPath, opt); texUnit = 3; break;
     default:  // USER
         // FIXME: use own ImageRequestHandler if we need to check and reuse parent tile...
         //tex = createLayerImage(id, emptyPath, nv->getImageRequestHandler()); texUnit = 2; break;

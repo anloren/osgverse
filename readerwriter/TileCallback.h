@@ -50,7 +50,7 @@ namespace osgVerse
                                         double width, double height) const;
         virtual void updateSkirtData(osg::Geometry* geometry, double tileRefSize, bool addingTriangles) const;
 
-        enum LayerType { ELEVATION = 0, ORTHOPHOTO, OCEAN_MASK, USER };
+        enum LayerType { ELEVATION = 0, ORTHOPHOTO, OCEAN_MASK, USER, OVERLAY };
         enum LayerState { DONE = 0, DEFERRED, FAILED };
         enum ElevationEncoding { RAW_ELEVATION = 0, TERRARIUM_ELEVATION };
         typedef std::pair<std::string, LayerState> DataPathPair;
