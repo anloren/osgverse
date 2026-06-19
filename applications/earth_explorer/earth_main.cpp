@@ -52,11 +52,11 @@ public:
     EnvironmentHandler(osgVerse::EarthAtmosphereOcean* eao, const std::string& folder)
     :   _earthData(eao), _mainFolder(folder), _pressingKey(0), _pathIndex(0), _sunAngle(0.0f)
     {
-        // OceanOpaque=1 -> oceans drawn from opaque satellite imagery (normal blue); =0 -> the
-        // procedural water layer shows through and turns orange-red at low sun. The UI checkbox
-        // defaults to checked (_ocean=true -> 1.0), but startup was forcing 0.0, so the globe
-        // launched with the orange-red water. Initialize to 1.0 to match the checkbox default.
-        _earthData->commonUniforms["OceanOpaque"]->set(1.0f);
+        // OceanOpaque is the PROCEDURAL ocean layer's opacity: =1 draws the stylized procedural
+        // water (which the user notes never used to show, and goes orange at low sun); =0 lets the
+        // plain satellite-imagery oceans show (rendered flat/correct by scattering_globe). Default
+        // to 0 -> plain satellite oceans, matching the original look.
+        _earthData->commonUniforms["OceanOpaque"]->set(0.0f);
         // Sun toward the default camera hemisphere (+X = prime meridian) so the globe launches
         // lit, not in red sunset/terminator. Matches the EarthControlUI default (Az0/El0 -> +X).
         _earthData->commonUniforms["WorldSunDir"]->set(
