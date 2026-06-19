@@ -61,7 +61,13 @@ namespace osgVerse
 
         /** Set the viewing distance */
         void setDistance(double distance) { _distance = distance; }
-        double getDistance() const { return (_animationRunning ? _animationDistance : _distance); }
+        // Report the EFFECTIVE distance (floored by terrain) — this is where the camera actually is,
+        // so LOD/paging requests tiles for the real view instead of the un-floored zoom target.
+        double getDistance() const
+        {
+            double d = (_animationRunning ? _animationDistance : _distance);
+            return (d > _terrainFloor) ? d : _terrainFloor;
+        }
 
         /** Set the intersection mask. Default is 0xffffffff.
             Objects outside the earth must not be intersected; otherwise incorrect results may occur sometime */
@@ -249,6 +255,11 @@ namespace osgVerse
             if (_animationDistance < _minDistance) _animationDistance = _minDistance;
         }
 
+        /** Per-frame: raycast straight down for the terrain TOP under the camera and ease
+            _terrainFloor toward the distance that keeps the eye >= _minDistance above it. Raise
+            fast (never sink in), lower slowly (smooth, no jitter). Only runs when close. */
+        void updateTerrainFloor();
+
         osg::ref_ptr<osg::Node> _node;
         osg::ref_ptr<osg::Node> _world;
         osg::ref_ptr<const osgGA::GUIEventAdapter> _ga_t0;  // Current event
@@ -272,6 +283,9 @@ namespace osgVerse
         double _latestLatitude, _latestLongitude, _latestAltitude;
         double _distance;  // Distance between eye and view point
         double _minDistance;  // Minimum allowed distance to prevent camera going below surface
+        double _terrainFloor; // smoothed min eye-distance from real terrain (0 = none); applied only in the
+                              // view matrix as max(_distance,_terrainFloor) so the camera can't sink into
+                              // elevated terrain. _distance (user zoom) is never modified -> no oscillation.
         float _tilt;  // Vertical angle to the horizon
 
         unsigned int _intersectionMask;  // Mask for intersection with the earth

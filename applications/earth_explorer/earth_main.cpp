@@ -208,11 +208,15 @@ static std::string createCustomPath(int type, const std::string& prefix, int x, 
     }
     else if (type == osgVerse::TileCallback::ELEVATION)
     {
-        // AWS Terrarium 高程最高约 z15。深瓦片（z>15）一律**建成平地**（返回 ""→ elevImage NULL → 海平面）。
-        // 取舍：放弃深 zoom 的 3D 起伏（影像仍全分辨率），换来稳定——深瓦片在海平面、相机(≥150m 椭球高)恒在其上，
-        // **不会穿模**（无尖刺扇/穿透）。给深瓦片真实高度需要"相机-地形碰撞 + 动态近远平面"子系统（无头无法验证），
-        // 留作单独立项；曾试过的"祖先采样/运行时继承"在 z16-19 会引发穿模/尖刺/闪烁，已放弃。
-        if (z > 15) return "";
+        // AWS Terrarium 高程最高约 z15。深瓦片（z>15）取 z15 **祖先瓦片**，createTile 用 elevScaleBias 采子区
+        // 一步烘焙正确高度 → 与 z15 父级连续、**消除 LOD 边界的视差错位/空白缝**。配套 EarthManipulator 的
+        // 地形地板（_terrainFloor）把相机挡在真实地形之上、防穿模。
+        if (z > 15)
+        {
+            int dz = z - 15, ax = x >> dz, ay = y >> dz;
+            int ayXYZ = (1 << 15) - 1 - ay;
+            return osgVerse::TileCallback::createPath(prefix, ax, ayXYZ, 15);
+        }
         return osgVerse::TileCallback::createPath(prefix, x, yXYZ, z);
     }
     else if (type == osgVerse::TileCallback::USER)
@@ -449,6 +453,8 @@ int main(int argc, char** argv)
 
     if (gotoLat < 1.0e8)  // --goto 指定了起始视点
         earthManipulator->setByEye(osg::inDegrees(gotoLat), osg::inDegrees(gotoLon), gotoAltKm * 1000.0);
+    // 无头斜视调试：EARTH_TILT=<弧度> 给相机一个俯仰角，便于截图看 LOD 边界的缝/穿模（仅调试用）。
+    { const char* te = getenv("EARTH_TILT"); if (te && te[0]) earthManipulator->makeDeltaTilt(-(float)atof(te)); }
 
     // 启动后台预热整个地球的低 LOD 瓦片（见 prefetchLowLODGlobe）。driver 线程 detach，
     // 进程退出时被回收；磁盘写为原子替换，即使中途被杀也不会留下半写瓦片。
