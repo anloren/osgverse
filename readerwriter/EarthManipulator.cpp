@@ -9,7 +9,7 @@ static double g_distanceToCenter = 0.0;
 
 EarthManipulator::EarthManipulator()
 :   _viewer(NULL), _latestLatitude(0.0), _latestLongitude(0.0), _latestAltitude(0.0),
-    _tilt(0.0f), _throwAllowed(true), _thrown(false), _locked(false), _minDistance(50.0), _terrainLift(0.0)
+    _tilt(0.0f), _throwAllowed(true), _thrown(false), _locked(false), _minDistance(50.0)
 {
     _tiltCenter.set(0.0, 0.0, -DBL_MAX);
     _rotateAxis.set(0.0, 0.0, -DBL_MAX);
@@ -193,55 +193,6 @@ void EarthManipulator::init(const osgGA::GUIEventAdapter& ea, osgGA::GUIActionAd
     flushMouseEventStack();
 }
 
-void EarthManipulator::clampToTerrain()
-{
-    // Always undo last frame's lift first and recompute fresh, so the lift tracks the terrain
-    // as it refines (otherwise a transient high hit during loading would lift the camera and
-    // never let it back down -> stuck far above flat ground).
-    _distance -= _terrainLift; _terrainLift = 0.0;
-    if (_distance < _minDistance) _distance = _minDistance;
-
-    if (!_viewer || !_viewer->getCamera() || !_world.valid()) return;
-    if (_distance > 20000.0) return;  // only when close (no Earth terrain > ~9 km); far views skip the raycast
-
-    osg::Vec3d eye = computeEye();
-    osg::Vec3d down = _worldCenter - eye; double d2c = down.length();
-    if (d2c < 1.0) return; down /= d2c;
-
-    // Vertical segment through the camera, extended both ways (RTT/near-far robustness, same
-    // trick as the tilt-center intersection). First hit = the near-side terrain top here.
-    double ext = _world->getBound().radius();
-    osg::Vec3d start = eye - down * ext, end = eye + down * ext;
-    osg::ref_ptr<osgUtil::LineSegmentIntersector> lsi = new osgUtil::LineSegmentIntersector(
-        osgUtil::Intersector::MODEL, start, end);
-    osgUtil::IntersectionVisitor iv(lsi.get());
-    iv.setTraversalMask(_intersectionMask);
-    // Hit the finest loaded terrain, not the coarsest. The default LOD pick uses distance
-    // from the (far-away) segment start, which selects coarse low-LOD tiles whose surface
-    // can sit hundreds of metres off the real ground and lift the camera way too high.
-    iv.setLODSelectionMode(osgUtil::IntersectionVisitor::USE_HIGHEST_LEVEL_OF_DETAIL);
-    _viewer->getCamera()->accept(iv);
-    if (!lsi->containsIntersections()) return;  // terrain not loaded here yet -> leave as-is
-
-    // Use the surface nearest the camera (smallest |camAbove|), not the first/highest hit.
-    // The down-line can also cross floating spike geometry far above the real ground; taking
-    // the nearest hit keeps the camera above the actual ground instead of above a spike.
-    double camAboveTerrain = 0.0; bool found = false;
-    const osgUtil::LineSegmentIntersector::Intersections& hits = lsi->getIntersections();
-    for (osgUtil::LineSegmentIntersector::Intersections::const_iterator it = hits.begin();
-         it != hits.end(); ++it)
-    {
-        double ca = (it->getWorldIntersectPoint() - eye) * down;  // >0 below camera, <0 above
-        if (!found || fabs(ca) < fabs(camAboveTerrain)) { camAboveTerrain = ca; found = true; }
-    }
-    if (found && camAboveTerrain < _minDistance)
-    {
-        _terrainLift = (_minDistance - camAboveTerrain);  // lift to >= _minDistance above the ground
-        _distance += _terrainLift;
-        if (_animationDistance < _distance) _animationDistance = _distance;
-    }
-}
-
 bool EarthManipulator::handle(const osgGA::GUIEventAdapter& ea, osgGA::GUIActionAdapter& us)
 {
     if (ea.getHandled() || ea.getModKeyMask() > 0) return false;
@@ -261,7 +212,6 @@ bool EarthManipulator::handle(const osgGA::GUIEventAdapter& ea, osgGA::GUIAction
         {
             if (calcMovement(true)) us.requestRedraw();
         }
-        clampToTerrain();  // keep the camera above the real terrain (global, all locations)
         g_distanceToCenter = getDistance();
         return false;
 
