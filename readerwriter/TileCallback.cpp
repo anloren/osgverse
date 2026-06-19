@@ -212,7 +212,8 @@ osg::Geometry* TileCallback::createTileGeometry(osg::Matrix& outMatrix, TileGeom
 
 osg::Geometry* TileCallback::createTileGeometry(osg::Matrix& outMatrix, osg::Texture* elevationTex,
                                                 const osg::Vec3d& tileMin, const osg::Vec3d& tileMax,
-                                                double width, double height) const
+                                                double width, double height,
+                                                const osg::Vec4& elevScaleBias) const
 {
     osg::Image* elevation = (elevationTex ? elevationTex->getImage(0) : NULL);
     bool useRealElevation = elevation ? (elevation->getDataType() == GL_FLOAT) : false;
@@ -246,7 +247,12 @@ osg::Geometry* TileCallback::createTileGeometry(osg::Matrix& outMatrix, osg::Tex
                 osg::Vec2 uv((double)x * invW / width, (double)y * invH / height);
                 if (elevation)
                 {
-                    osg::Vec4 elevColor = elevation->getColor(uv);
+                    // Sample elevation through the sub-region transform (identity for own-elevation
+                    // tiles; selects the z15 ancestor quadrant for deep tiles). Keep uv itself for
+                    // the ortho texcoord below.
+                    osg::Vec2 euv(uv[0] * elevScaleBias[2] + elevScaleBias[0],
+                                  uv[1] * elevScaleBias[3] + elevScaleBias[1]);
+                    osg::Vec4 elevColor = elevation->getColor(euv);
                     // Reject out-of-range elevation (real Earth is ~ -11 km..+9 km). The old
                     // ±10e6 bound let garbage up to ~thousands of km through, which displaced a
                     // vertex far into space — a thin spike/line shooting off the globe. Fall
@@ -302,7 +308,9 @@ osg::Geometry* TileCallback::createTileGeometry(osg::Matrix& outMatrix, osg::Tex
                 osg::Vec2 uv((double)x * invW / width, (double)y * invH / height);
                 if (elevation)
                 {
-                    osg::Vec4 elevColor = elevation->getColor(uv);
+                    osg::Vec2 euv(uv[0] * elevScaleBias[2] + elevScaleBias[0],
+                                  uv[1] * elevScaleBias[3] + elevScaleBias[1]);
+                    osg::Vec4 elevColor = elevation->getColor(euv);
                     // Reject out-of-range elevation (real Earth is ~ -11 km..+9 km). The old
                     // ±10e6 bound let garbage up to ~thousands of km through, which displaced a
                     // vertex far into space — a thin spike/line shooting off the globe. Fall
@@ -600,13 +608,13 @@ bool TileCallback::updateLayerData(osg::NodeVisitor* nv, osg::Node* node, LayerT
         tex = createLayerImage(id, emptyPath, opt); texUnit = 2; break;
     }
 
-    // ELEVATION and OCEAN_MASK are base layers every tile needs: elevation for height,
-    // the mask for land/ocean classification + relief shading. When this tile has none of
-    // its own (z>15 has no terrarium, z>3 has no Mask_lv3, or a transient failure) it must
-    // inherit the parent's, even with emptyPath — otherwise elevation collapses flat and
-    // the mask reads "ocean" over everything. OVERLAY/USER legitimately disappear at deep
-    // zoom, so they keep the !emptyPath guard.
-    if (!tex && node->getNumParents() > 0 && (id == ELEVATION || id == OCEAN_MASK || !emptyPath))
+    // OCEAN_MASK inherits the parent's when this tile has none of its own (Mask_lv3 is z<=3
+    // only) so land/ocean classification + relief shading stay continuous; it's a texture
+    // overlay, so a stale UV is only cosmetic. ELEVATION is NOT inherited here anymore: deep
+    // tiles bake the correct z15-ancestor height directly at build time (createTileGeometry +
+    // elevScaleBias), which avoids the racy multi-level re-displacement that caused spikes/
+    // warping. OVERLAY/USER legitimately disappear at deep zoom, so they keep the !emptyPath guard.
+    if (!tex && node->getNumParents() > 0 && (id == OCEAN_MASK || !emptyPath))
         tex = findAndUseParentData(id, node->getParent(0));
     if (tex.valid())
     {

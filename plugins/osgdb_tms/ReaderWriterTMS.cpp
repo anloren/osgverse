@@ -340,14 +340,9 @@ protected:
         layerTasks.push_back([&]() { overlayImage = tileCB->createLayerImage(osgVerse::TileCallback::OVERLAY, emptyPathO, opt); });
         LayerLoadPool::instance().runAll(layerTasks);
 
-        // Elevation is special: a 3D tile MUST have height data. If this tile has none of
-        // its own — z>15 has no AWS terrarium data (createCustomPath returns ""), or a
-        // transient fetch failure — defer it so operator()/updateLayerData inherits the
-        // parent tile's elevation. Otherwise the tile is built flat at sea level, which on
-        // high terrain (e.g. Kunming ~1890 m) sinks deep tiles below their z15 parent and
-        // shows them parallax-misaligned. elevPath empty = elevation not configured at all
-        // → leave flat (nothing to inherit).
-        if (!elevHandler && !elevImage && !elevPath.empty())
+        // For z>15 the elevation texture is the z15 ANCESTOR tile (see createCustomPath); the
+        // correct height is baked in one step via elevScaleBias below, so no runtime inheritance.
+        if (!elevHandler && !elevImage && !emptyPathE)
             { tileCB->setLayerPathState(osgVerse::TileCallback::ELEVATION, failState); allLayersDone = false; }
         if (!orthImage && !emptyPath0)
             { tileCB->setLayerPathState(osgVerse::TileCallback::ORTHOPHOTO, failState); allLayersDone = false; }
@@ -368,9 +363,18 @@ protected:
         // FIXME: this makes no future tiles... consider a better way?
         if (!orthImage) { OSG_NOTICE << "[ReaderWriterTMS] No imagery for tile " << name << "\n"; return NULL; }
 
+        // For z>15 the elevation texture is the z15 ancestor (createCustomPath); pick this
+        // tile's quadrant within it so the right height is baked in directly. Deterministic
+        // from the tile coords — no parent-uniform dependency, no timing race.
+        osg::Vec4 elevScaleBias(0.0f, 0.0f, 1.0f, 1.0f);
+        if (z > 15)
+        {
+            int dz = z - 15, subN = 1 << dz; float inv = 1.0f / (float)subN;
+            elevScaleBias.set((float)(x & (subN - 1)) * inv, (float)(y & (subN - 1)) * inv, inv, inv);
+        }
         osg::ref_ptr<osg::Geometry> geom = elevHandler.valid() ?
             tileCB->createTileGeometry(localMatrix, elevHandler.get(), tileMin, tileMax, tileWidth, tileHeight) :
-            tileCB->createTileGeometry(localMatrix, elevImage.get(), tileMin, tileMax, tileWidth, tileHeight);
+            tileCB->createTileGeometry(localMatrix, elevImage.get(), tileMin, tileMax, tileWidth, tileHeight, elevScaleBias);
         geom->setUseDisplayList(false); geom->setUseVertexBufferObjects(true); geom->setName(name + "_Geom");
         if (orthImage.valid())
         {

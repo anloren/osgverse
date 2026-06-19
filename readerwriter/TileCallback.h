@@ -40,9 +40,14 @@ namespace osgVerse
                                        double& tileWidth, double& tileHeight) const;
         virtual double mapAltitude(const osg::Vec4& color, double minH = 0.0, double maxH = 20000.0) const;
 
+        // elevScaleBias maps tile UV [0,1] into the elevation texture's sub-region (xy = bias,
+        // zw = scale). Identity for a tile using its own elevation; for deep tiles (z>15) that
+        // sample a z15 ancestor it selects the right quadrant, so the correct height is baked
+        // in one step at build time (no fragile on-the-fly re-displacement).
         virtual osg::Geometry* createTileGeometry(osg::Matrix& outMatrix, osg::Texture* elevation,
                                                   const osg::Vec3d& tileMin, const osg::Vec3d& tileMax,
-                                                  double width, double height) const;
+                                                  double width, double height,
+                                                  const osg::Vec4& elevScaleBias = osg::Vec4(0.0f, 0.0f, 1.0f, 1.0f)) const;
         virtual osg::Geometry* createTileGeometry(osg::Matrix& outMatrix, TileGeometryHandler* handler,
                                                   const osg::Vec3d& tileMin, const osg::Vec3d& tileMax,
                                                   double width, double height) const;

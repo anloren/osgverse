@@ -208,12 +208,16 @@ static std::string createCustomPath(int type, const std::string& prefix, int x, 
     }
     else if (type == osgVerse::TileCallback::ELEVATION)
     {
-        // AWS Terrarium 高程最高约 z15；z>15 请求必 404，会刷屏 + 主线程 DEFERRED 重试阻塞，故截断。
-        // 截断后这些深瓦片**没有自己的高程数据** → createTile 把它们标记 DEFERRED（见 ReaderWriterTMS：
-        // `!elevHandler && !elevImage && !elevPath.empty()`），operator()/updateLayerData 复用**父级 z15
-        // 高程**（findAndUseParentData，对 ELEVATION 放行 emptyPath）。否则深瓦片会被建成海平面平地，
-        // 在高海拔地区（如昆明 ~1890m）下沉到 z15 父级之下、随视角变化呈视差错位（曾出现的 bug）。
-        if (z > 15) return "";
+        // AWS Terrarium 高程最高约 z15。深瓦片（z>15）没有自己的高程数据：直接取 z15 **祖先瓦片**，
+        // 由 createTile 计算对应子区（elevScaleBias）在建几何时一步采样 → 深地形拿到正确高度（z15 分辨率）。
+        // 这取代了原来"建平地→运行时重置几何"的两步继承（其多级 UV 累加依赖父级 uniform、有时序竞态，
+        // 会造成尖刺/闪烁/黑洞/道路变形）。祖先瓦片走 z15 的 XYZ Y 翻转。
+        if (z > 15)
+        {
+            int dz = z - 15, ax = x >> dz, ay = y >> dz;
+            int ayXYZ = (1 << 15) - 1 - ay;
+            return osgVerse::TileCallback::createPath(prefix, ax, ayXYZ, 15);
+        }
         return osgVerse::TileCallback::createPath(prefix, x, yXYZ, z);
     }
     else if (type == osgVerse::TileCallback::USER)
