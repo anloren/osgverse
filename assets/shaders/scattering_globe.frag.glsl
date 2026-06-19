@@ -28,7 +28,7 @@ vec3 hdr(vec3 L)
     L.b = L.b < 1.413 ? pow(L.b * 0.38317, 1.0 / 2.2) : 1.0 - exp(-L.b);
     // 轻度提升饱和与对比，改善大气下偏灰的观感
     float luma = dot(L, vec3(0.299, 0.587, 0.114));
-    L = mix(vec3(luma), L, 1.18);                 // +18% 饱和
+    L = mix(vec3(luma), L, 1.08);                 // +8% 饱和（原 1.18 把晨昏线橙带搞得过饱和刺眼，调淡）
     L = clamp((L - 0.5) * 1.06 + 0.5, 0.0, 1.0);  // +6% 对比
     return L;
 }
@@ -91,7 +91,9 @@ void main()
     groundColor.a *= clamp(GlobalOpaque, 0.0, 1.0);
 
     vec3 extinction = vec3(1.0);
-    vec3 inscatter = inScattering(WCP, P, WSD, extinction, 0.0);
+    // 晨昏线处掠射太阳的 inscatter 是橙红落日色；原值把它渲成一条刺眼的橙带。
+    // 仅夜/晨昏侧(cTheta→0)用到 inscatter，调淡只柔化那条带、不影响白天侧原始影像。
+    vec3 inscatter = inScattering(WCP, P, WSD, extinction, 0.0) * 0.5;
     vec3 compositeColor = groundColor.rgb * extinction + inscatter;
     //vec4 finalColor = vec4(hdr(compositeColor), groundColor.a);
     vec4 finalColor = vec4(mix(hdr(compositeColor), originalGroundColor, cTheta), groundColor.a);
