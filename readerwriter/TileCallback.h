@@ -4,7 +4,6 @@
 #include <osg/Image>
 #include <osg/Geometry>
 #include <osgDB/ReaderWriter>
-#include <OpenThreads/Mutex>
 #include <functional>
 #include <set>
 #include "Export.h"
@@ -30,7 +29,7 @@ namespace osgVerse
     {
     public:
         TileCallback(bool g = true)
-        :   _x(-1), _y(-1), _z(-1), _skirtRatio(0.02f), _elevationScale(1.0f), _tileElevRange(0.0f), _withGlobeAttr(g), _flatten(true),
+        :   _x(-1), _y(-1), _z(-1), _skirtRatio(0.02f), _elevationScale(1.0f), _withGlobeAttr(g), _flatten(true),
             _bottomLeft(false), _useWebMercator(false), _layersDone(false), _elevationEncoding(RAW_ELEVATION)
         { _createPathFunc = NULL; }
         virtual void operator()(osg::Node* node, osg::NodeVisitor* nv);
@@ -40,14 +39,9 @@ namespace osgVerse
                                        double& tileWidth, double& tileHeight) const;
         virtual double mapAltitude(const osg::Vec4& color, double minH = 0.0, double maxH = 20000.0) const;
 
-        // elevScaleBias maps tile UV [0,1] into the elevation texture's sub-region (xy = bias,
-        // zw = scale). Identity for a tile using its own elevation; for deep tiles (z>15) that
-        // sample a z15 ancestor it selects the right quadrant, so the correct height is baked
-        // in one step at build time (no fragile on-the-fly re-displacement).
         virtual osg::Geometry* createTileGeometry(osg::Matrix& outMatrix, osg::Texture* elevation,
                                                   const osg::Vec3d& tileMin, const osg::Vec3d& tileMax,
-                                                  double width, double height,
-                                                  const osg::Vec4& elevScaleBias = osg::Vec4(0.0f, 0.0f, 1.0f, 1.0f)) const;
+                                                  double width, double height) const;
         virtual osg::Geometry* createTileGeometry(osg::Matrix& outMatrix, TileGeometryHandler* handler,
                                                   const osg::Vec3d& tileMin, const osg::Vec3d& tileMax,
                                                   double width, double height) const;
@@ -145,8 +139,6 @@ namespace osgVerse
         CreatePathFunc _createPathFunc;
         ElevationEncoding _elevationEncoding;
         int _x, _y, _z; float _skirtRatio, _elevationScale;
-        float _tileElevRange;  // max-min vertex altitude in this tile; sizes the skirt to cover
-                               // elevation cracks at steep terrain / LOD boundaries
         bool _withGlobeAttr, _flatten, _bottomLeft, _useWebMercator, _layersDone;
     };
 
@@ -183,7 +175,6 @@ namespace osgVerse
         std::map<int, std::string> _layerPaths;
         std::map<std::string, std::string> _acceptHandlerExts;
         std::map<std::string, osg::observer_ptr<osgDB::ReaderWriter>> _cachedReaderWriters;
-        OpenThreads::Mutex _cachedRWMutex;  // guards _cachedReaderWriters (called from many pager/pool threads)
         osg::ref_ptr<DynamicTileCallback> _dynamicCallback;
         osg::ref_ptr<osgDB::Options> _options;
     };

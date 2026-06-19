@@ -96,12 +96,7 @@ void main()
     vec3 inscatter = inScattering(WCP, P, WSD, extinction, 0.0) * 0.5;
     vec3 compositeColor = groundColor.rgb * extinction + inscatter;
     //vec4 finalColor = vec4(hdr(compositeColor), groundColor.a);
-    // Show the satellite imagery directly. The sun-radiance/inscatter shading above tinted the
-    // whole ocean orange-red and over-exposed bright land (Sahara → white) at the whole-earth
-    // view, because at that distance the sun grazes most of the disc (sunset-colored sunL). The
-    // imagery already looks correct everywhere; the planet's atmosphere halo is still drawn by the
-    // separate scattering_sky pass. (Was: mix(hdr(compositeColor), originalGroundColor, cTheta).)
-    vec4 finalColor = vec4(originalGroundColor, groundColor.a);
+    vec4 finalColor = vec4(mix(hdr(compositeColor), originalGroundColor, cTheta), groundColor.a);
 
 #ifdef VERSE_GLES3
     fragColor/*Atmospheric Color*/ = finalColor;

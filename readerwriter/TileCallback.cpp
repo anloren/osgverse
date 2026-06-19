@@ -6,7 +6,6 @@
 #include <osgDB/FileNameUtils>
 #include <osgDB/FileUtils>
 #include <osgUtil/SmoothingVisitor>
-#include <OpenThreads/ScopedLock>
 
 #include <modeling/Math.h>
 #include <pipeline/Utilities.h>
@@ -109,10 +108,7 @@ osg::Image* TileCallback::decodeTerrarium(const osg::Image* src)
 osg::Texture* TileCallback::createLayerImage(LayerType id, bool& emptyPath, const osgDB::Options* opt,
                                              osg::NodeVisitor::ImageRequestHandler* irh)
 {
-    // Use find() (const, concurrency-safe) rather than operator[] (may rehash/insert):
-    // createTile now calls this for several layers at once on the parallel load pool.
-    std::map<int, DataPathPair>::const_iterator pit = _layerPaths.find((int)id);
-    std::string inputAddr = (pit != _layerPaths.end()) ? pit->second.first : std::string();
+    std::string inputAddr = _layerPaths[(int)id].first;
     emptyPath = (inputAddr.empty()); if (emptyPath) return NULL;
 
     std::string url = _createPathFunc ? _createPathFunc((int)id, inputAddr, _x, _y, _z)
@@ -145,8 +141,7 @@ osg::Texture* TileCallback::createLayerImage(LayerType id, bool& emptyPath, cons
 
 TileGeometryHandler* TileCallback::createLayerHandler(LayerType id, bool& emptyPath, const osgDB::Options* opt)
 {
-    std::map<int, DataPathPair>::const_iterator pit = _layerPaths.find((int)id);
-    std::string inputAddr = (pit != _layerPaths.end()) ? pit->second.first : std::string();
+    std::string inputAddr = _layerPaths[(int)id].first;
     emptyPath = (inputAddr.empty()); if (emptyPath) return NULL;
 
     std::string url = _createPathFunc ? _createPathFunc((int)id, inputAddr, _x, _y, _z)
@@ -212,8 +207,7 @@ osg::Geometry* TileCallback::createTileGeometry(osg::Matrix& outMatrix, TileGeom
 
 osg::Geometry* TileCallback::createTileGeometry(osg::Matrix& outMatrix, osg::Texture* elevationTex,
                                                 const osg::Vec3d& tileMin, const osg::Vec3d& tileMax,
-                                                double width, double height,
-                                                const osg::Vec4& elevScaleBias) const
+                                                double width, double height) const
 {
     osg::Image* elevation = (elevationTex ? elevationTex->getImage(0) : NULL);
     bool useRealElevation = elevation ? (elevation->getDataType() == GL_FLOAT) : false;
@@ -225,7 +219,6 @@ osg::Geometry* TileCallback::createTileGeometry(osg::Matrix& outMatrix, osg::Tex
     osg::ref_ptr<osg::Vec3Array> na = new osg::Vec3Array(numVertices);
     osg::ref_ptr<osg::Vec2Array> ta = new osg::Vec2Array(numVertices);
     osg::ref_ptr<osg::Vec4Array> ca = new osg::Vec4Array(numVertices);
-    double minAlt = 1e9, maxAlt = -1e9;  // elevation range (function scope) -> sizes the crack-hiding skirt
     if (!_flatten)
     {
         osg::Vec3d center = adjustLatitudeLongitudeAltitude((tileMin + tileMax) * 0.5, _useWebMercator);
@@ -248,24 +241,11 @@ osg::Geometry* TileCallback::createTileGeometry(osg::Matrix& outMatrix, osg::Tex
                 osg::Vec2 uv((double)x * invW / width, (double)y * invH / height);
                 if (elevation)
                 {
-                    // Sample elevation through the sub-region transform (identity for own-elevation
-                    // tiles; selects the z15 ancestor quadrant for deep tiles). Keep uv itself for
-                    // the ortho texcoord below.
-                    osg::Vec2 euv(uv[0] * elevScaleBias[2] + elevScaleBias[0],
-                                  uv[1] * elevScaleBias[3] + elevScaleBias[1]);
-                    osg::Vec4 elevColor = elevation->getColor(euv);
-                    // Reject out-of-range elevation (real Earth is ~ -11 km..+9 km). The old
-                    // ±10e6 bound let garbage up to ~thousands of km through, which displaced a
-                    // vertex far into space — a thin spike/line shooting off the globe. Fall
-                    // back to the neighbour's height instead. (Non-float colour layers read in
-                    // [0,1], so this only ever clamps the real-metre terrarium path.)
-                    // Negated range so NaN is caught too (NaN fails both >/<, so the old
-                    // `>15000 || <-15000` let NaN through -> NaN vertex -> flickering spike lines).
-                    if (!(elevColor[0] > -15000.0 && elevColor[0] < 15000.0)) { altitude = lastAlt; }
+                    osg::Vec4 elevColor = elevation->getColor(uv);
+                    if (elevColor[0] > 10e6 || elevColor[0] < -10e6) { altitude = lastAlt; }
                     else altitude = (useRealElevation ? elevColor[0] : mapAltitude(elevColor)) * _elevationScale;
                 }
 
-                if (altitude < minAlt) minAlt = altitude; if (altitude > maxAlt) maxAlt = altitude;
                 osg::Vec3d lla = adjustLatitudeLongitudeAltitude(
                     tileMin + osg::Vec3d((double)x * invW, (double)y * invH, altitude), _useWebMercator);
                 osg::Vec3d ecef = convertToECEF(lla); lastAlt = altitude;
@@ -310,17 +290,8 @@ osg::Geometry* TileCallback::createTileGeometry(osg::Matrix& outMatrix, osg::Tex
                 osg::Vec2 uv((double)x * invW / width, (double)y * invH / height);
                 if (elevation)
                 {
-                    osg::Vec2 euv(uv[0] * elevScaleBias[2] + elevScaleBias[0],
-                                  uv[1] * elevScaleBias[3] + elevScaleBias[1]);
-                    osg::Vec4 elevColor = elevation->getColor(euv);
-                    // Reject out-of-range elevation (real Earth is ~ -11 km..+9 km). The old
-                    // ±10e6 bound let garbage up to ~thousands of km through, which displaced a
-                    // vertex far into space — a thin spike/line shooting off the globe. Fall
-                    // back to the neighbour's height instead. (Non-float colour layers read in
-                    // [0,1], so this only ever clamps the real-metre terrarium path.)
-                    // Negated range so NaN is caught too (NaN fails both >/<, so the old
-                    // `>15000 || <-15000` let NaN through -> NaN vertex -> flickering spike lines).
-                    if (!(elevColor[0] > -15000.0 && elevColor[0] < 15000.0)) { altitude = lastAlt; }
+                    osg::Vec4 elevColor = elevation->getColor(uv);
+                    if (elevColor[0] > 10e6 || elevColor[0] < -10e6) { altitude = lastAlt; }
                     else altitude = (useRealElevation ? elevColor[0] : mapAltitude(elevColor)) * elevationScale2D;
                 }
 
@@ -351,8 +322,6 @@ osg::Geometry* TileCallback::createTileGeometry(osg::Matrix& outMatrix, osg::Tex
         geom->setVertexAttribBinding(GLOBE_ATTRIBUTE_INDEX, osg::Geometry::BIND_PER_VERTEX);
     }
     geom->addPrimitiveSet(de.get());
-    if (!_flatten)
-        const_cast<TileCallback*>(this)->_tileElevRange = (maxAlt > minAlt) ? (float)(maxAlt - minAlt) : 0.0f;
     if (!_flatten && _skirtRatio > 0.0f)
         updateSkirtData(geom, osg::inDegrees(tileMax.y() - tileMin.y()), true);
     return geom;
@@ -392,14 +361,7 @@ void TileCallback::updateTileGeometry(osg::Geometry* geom, osg::Texture* elevati
                     uv[1] = uv[1] * scaleRange[3] + scaleRange[1];
 
                     osg::Vec4 elevColor = elevation->getColor(uv);
-                    // Reject out-of-range elevation (real Earth is ~ -11 km..+9 km). The old
-                    // ±10e6 bound let garbage up to ~thousands of km through, which displaced a
-                    // vertex far into space — a thin spike/line shooting off the globe. Fall
-                    // back to the neighbour's height instead. (Non-float colour layers read in
-                    // [0,1], so this only ever clamps the real-metre terrarium path.)
-                    // Negated range so NaN is caught too (NaN fails both >/<, so the old
-                    // `>15000 || <-15000` let NaN through -> NaN vertex -> flickering spike lines).
-                    if (!(elevColor[0] > -15000.0 && elevColor[0] < 15000.0)) { altitude = lastAlt; }
+                    if (elevColor[0] > 10e6 || elevColor[0] < -10e6) { altitude = lastAlt; }
                     else altitude = (useRealElevation ? elevColor[0] : mapAltitude(elevColor)) * _elevationScale;
                 }
 
@@ -436,14 +398,7 @@ void TileCallback::updateTileGeometry(osg::Geometry* geom, osg::Texture* elevati
                     uv[1] = uv[1] * scaleRange[3] + scaleRange[1];
 
                     osg::Vec4 elevColor = elevation->getColor(uv);
-                    // Reject out-of-range elevation (real Earth is ~ -11 km..+9 km). The old
-                    // ±10e6 bound let garbage up to ~thousands of km through, which displaced a
-                    // vertex far into space — a thin spike/line shooting off the globe. Fall
-                    // back to the neighbour's height instead. (Non-float colour layers read in
-                    // [0,1], so this only ever clamps the real-metre terrarium path.)
-                    // Negated range so NaN is caught too (NaN fails both >/<, so the old
-                    // `>15000 || <-15000` let NaN through -> NaN vertex -> flickering spike lines).
-                    if (!(elevColor[0] > -15000.0 && elevColor[0] < 15000.0)) { altitude = lastAlt; }
+                    if (elevColor[0] > 10e6 || elevColor[0] < -10e6) { altitude = lastAlt; }
                     else altitude = (useRealElevation ? elevColor[0] : mapAltitude(elevColor)) * elevationScale2D;
                 }
 
@@ -459,13 +414,7 @@ void TileCallback::updateTileGeometry(osg::Geometry* geom, osg::Texture* elevati
 
 void TileCallback::updateSkirtData(osg::Geometry* geom, double tileRefSize, bool addingTriangles) const
 {
-    // Skirt must be tall enough to hide cracks at tile edges. The tile-size term handles the
-    // T-junction between LODs; the elevation-range term handles steep terrain / coastlines where
-    // adjacent tiles differ by far more than the tile's own width (a fixed-ratio skirt left
-    // black gaps there). 1.5x gives margin for the coarser neighbour reaching a bit further.
     double skirtHeight = osg::WGS_84_RADIUS_POLAR * tileRefSize * _skirtRatio;
-    double elevSkirt = (double)_tileElevRange * 1.5;
-    if (elevSkirt > skirtHeight) skirtHeight = elevSkirt;
     unsigned int numRows = TILE_ROWS, numCols = TILE_COLS;
     unsigned int vi = numRows * numCols;
     if (!geom) return; else if (!geom->getVertexArray() || geom->getNumPrimitiveSets() == 0) return;
@@ -618,13 +567,7 @@ bool TileCallback::updateLayerData(osg::NodeVisitor* nv, osg::Node* node, LayerT
         tex = createLayerImage(id, emptyPath, opt); texUnit = 2; break;
     }
 
-    // OCEAN_MASK inherits the parent's when this tile has none of its own (Mask_lv3 is z<=3
-    // only) so land/ocean classification + relief shading stay continuous; it's a texture
-    // overlay, so a stale UV is only cosmetic. ELEVATION is NOT inherited here anymore: deep
-    // tiles bake the correct z15-ancestor height directly at build time (createTileGeometry +
-    // elevScaleBias), which avoids the racy multi-level re-displacement that caused spikes/
-    // warping. OVERLAY/USER legitimately disappear at deep zoom, so they keep the !emptyPath guard.
-    if (!tex && node->getNumParents() > 0 && (id == OCEAN_MASK || !emptyPath))
+    if (!tex && !emptyPath && node->getNumParents() > 0)
         tex = findAndUseParentData(id, node->getParent(0));
     if (tex.valid())
     {
@@ -754,10 +697,6 @@ bool TileManager::isHandlerExtension(const std::string& ext, std::string& sugges
 
 osgDB::ReaderWriter* TileManager::getReaderWriter(const std::string& protocol, const std::string& url)
 {
-    // Called concurrently from every pager DR thread and (now) the parallel layer-load
-    // pool. The cache is mutated on a miss, so guard it — otherwise two threads inserting
-    // at once corrupt the map. Contended only during the first tiles; pure reads after.
-    OpenThreads::ScopedLock<OpenThreads::Mutex> lock(_cachedRWMutex);
     std::map<std::string, osg::observer_ptr<osgDB::ReaderWriter>>::iterator it = _cachedReaderWriters.find(protocol);
     if (it != _cachedReaderWriters.end()) return it->second.get();
     std::string ext = osgDB::getFileExtension(url); it = _cachedReaderWriters.find(ext);

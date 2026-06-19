@@ -9,7 +9,7 @@ static double g_distanceToCenter = 0.0;
 
 EarthManipulator::EarthManipulator()
 :   _viewer(NULL), _latestLatitude(0.0), _latestLongitude(0.0), _latestAltitude(0.0),
-    _tilt(0.0f), _throwAllowed(true), _thrown(false), _locked(false), _minDistance(50.0), _terrainFloor(0.0), _terrainFloorRadius(0.0)
+    _tilt(0.0f), _throwAllowed(true), _thrown(false), _locked(false), _minDistance(50.0)
 {
     _tiltCenter.set(0.0, 0.0, -DBL_MAX);
     _rotateAxis.set(0.0, 0.0, -DBL_MAX);
@@ -53,13 +53,9 @@ void EarthManipulator::setByInverseMatrix(const osg::Matrixd& mat)
 osg::Matrixd EarthManipulator::getManipulatorMatrix(bool withTilt) const
 {
     osg::Matrixd matrix;
-    // Terrain floor applied ONLY here: eye sits at max(distance, _terrainFloor) from the look-at
-    // point, so it can't drop below real terrain — without ever modifying _distance (the user's
-    // zoom), so there is nothing to oscillate frame-to-frame.
     if (_animationRunning)
     {
-        double animEff = (_animationDistance > _terrainFloor) ? _animationDistance : _terrainFloor;
-        matrix.makeTranslate(0.0f, 0.0f, animEff);
+        matrix.makeTranslate(0.0f, 0.0f, _animationDistance);
         if (withTilt) matrix.postMultRotate(_animationTiltRotation);
         matrix.postMultRotate(_initRotation);
         matrix.postMultTranslate(_center);
@@ -69,26 +65,12 @@ osg::Matrixd EarthManipulator::getManipulatorMatrix(bool withTilt) const
     }
     else
     {
-        double eff = (_distance > _terrainFloor) ? _distance : _terrainFloor;
-        matrix.makeTranslate(0.0f, 0.0f, eff);
+        matrix.makeTranslate(0.0f, 0.0f, _distance);
         if (withTilt) matrix.postMultRotate(_tiltRotation);
         matrix.postMultRotate(_initRotation);
         matrix.postMultTranslate(_center);
         matrix.postMultRotate(_worldRotation);
         matrix.postMultTranslate(_worldCenter);
-    }
-    // Radial terrain floor: guarantee the eye stays above terrain in true ALTITUDE, not just
-    // distance-from-lookat. The distance floor (eff) lifts correctly only when looking straight
-    // down; under tilt, more distance pushes the eye sideways so it can still sink under ground
-    // (and the skirts/underside flare into "tall panels"). Pushing the eye out along the
-    // geocentric radial keeps a real minimum altitude at any tilt. No-op top-down (already high).
-    if (_terrainFloorRadius > 0.0)
-    {
-        osg::Vec3d eye = matrix.getTrans();
-        osg::Vec3d fromCenter = eye - _worldCenter;
-        double r = fromCenter.length();
-        if (r > 1.0 && _terrainFloorRadius > r)
-            matrix.setTrans(_worldCenter + fromCenter * (_terrainFloorRadius / r));
     }
     return matrix;
 }
@@ -211,52 +193,6 @@ void EarthManipulator::init(const osgGA::GUIEventAdapter& ea, osgGA::GUIActionAd
     flushMouseEventStack();
 }
 
-void EarthManipulator::updateTerrainFloor()
-{
-    if (!_viewer || !_viewer->getCamera() || !_world.valid()) return;
-    double eff = (_distance > _terrainFloor) ? _distance : _terrainFloor;
-    if (eff > 20000.0) { if (_terrainFloor > 0.0) _terrainFloor *= 0.9; _terrainFloorRadius = 0.0; return; }  // far: release the floor
-
-    osg::Vec3d eye = computeEye();  // uses the floored distance via getManipulatorMatrix
-    osg::Vec3d down = _worldCenter - eye; double d2c = down.length();
-    if (d2c < 1.0) return; down /= d2c;
-
-    // Vertical segment from far above the camera to far below.
-    double ext = _world->getBound().radius();
-    osg::Vec3d start = eye - down * ext, end = eye + down * ext;
-    osg::ref_ptr<osgUtil::LineSegmentIntersector> lsi = new osgUtil::LineSegmentIntersector(
-        osgUtil::Intersector::MODEL, start, end);
-    osgUtil::IntersectionVisitor iv(lsi.get());
-    iv.setTraversalMask(_intersectionMask);
-    iv.setLODSelectionMode(osgUtil::IntersectionVisitor::USE_HIGHEST_LEVEL_OF_DETAIL);  // finest terrain
-    _viewer->getCamera()->accept(iv);
-    if (!lsi->containsIntersections()) return;  // terrain not loaded here yet -> hold current floor
-
-    // FIRST hit (nearest the far-above start) = the terrain TOP under the camera. Using the top
-    // (not the nearest hit to the eye) is essential: when the eye is below the surface the nearest
-    // hit is the underside, which would under-lift and leave the camera buried.
-    osg::Vec3d top = lsi->getFirstIntersection().getWorldIntersectPoint();
-    double camAbove = (top - eye) * down;  // < 0 if the eye is below the surface (penetrating)
-
-    double needed = eff + (_minDistance - camAbove); if (needed < 0.0) needed = 0.0;
-    double diff = needed - _terrainFloor;
-
-    // Radial floor: the minimum geocentric radius the eye must keep = terrain-top radius + minDist.
-    // This is what actually prevents penetration under tilt (see getManipulatorMatrix). Smoothed
-    // with the same raise-fast / lower-slow / 2 m deadband to avoid loading jitter and flicker.
-    double reqRadius = (top - _worldCenter).length() + _minDistance;
-    if (_terrainFloorRadius <= 0.0) _terrainFloorRadius = reqRadius;
-    else
-    {
-        double dr = reqRadius - _terrainFloorRadius;
-        if (fabs(dr) >= 2.0) _terrainFloorRadius += (dr > 0.0) ? dr * 0.5 : dr * 0.12;
-    }
-
-    if (fabs(diff) < 2.0) return;            // deadband: ignore sub-2 m variation (kills loading jitter)
-    if (diff > 0.0) _terrainFloor += diff * 0.5;    // raise fast: never let the camera sink in
-    else            _terrainFloor += diff * 0.12;   // lower slow: smooth descent, no flicker
-}
-
 bool EarthManipulator::handle(const osgGA::GUIEventAdapter& ea, osgGA::GUIActionAdapter& us)
 {
     if (ea.getHandled() || ea.getModKeyMask() > 0) return false;
@@ -276,7 +212,6 @@ bool EarthManipulator::handle(const osgGA::GUIEventAdapter& ea, osgGA::GUIAction
         {
             if (calcMovement(true)) us.requestRedraw();
         }
-        updateTerrainFloor();  // keep the camera above real terrain (smoothed; no _distance change)
         g_distanceToCenter = getDistance();
         return false;
 

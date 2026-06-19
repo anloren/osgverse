@@ -16,7 +16,6 @@
 #include <readerwriter/EarthManipulator.h>
 #include <readerwriter/TileCallback.h>
 #include <readerwriter/FileCache.h>
-#include <readerwriter/Utilities.h>
 #include <pipeline/Pipeline.h>
 #include "EarthControlUI.h"
 #include "LayerManager.h"
@@ -24,9 +23,6 @@
 #include <iostream>
 #include <sstream>
 #include <ctime>
-#include <thread>
-#include <atomic>
-#include <vector>
 
 #ifdef OSG_LIBRARY_STATIC
 USE_OSG_PLUGINS()
@@ -52,15 +48,9 @@ public:
     EnvironmentHandler(osgVerse::EarthAtmosphereOcean* eao, const std::string& folder)
     :   _earthData(eao), _mainFolder(folder), _pressingKey(0), _pathIndex(0), _sunAngle(0.0f)
     {
-        // OceanOpaque is the PROCEDURAL ocean layer's opacity: =1 draws the stylized procedural
-        // water (which the user notes never used to show, and goes orange at low sun); =0 lets the
-        // plain satellite-imagery oceans show (rendered flat/correct by scattering_globe). Default
-        // to 0 -> plain satellite oceans, matching the original look.
         _earthData->commonUniforms["OceanOpaque"]->set(0.0f);
-        // Sun toward the default camera hemisphere (+X = prime meridian) so the globe launches
-        // lit, not in red sunset/terminator. Matches the EarthControlUI default (Az0/El0 -> +X).
         _earthData->commonUniforms["WorldSunDir"]->set(
-            osg::Vec3(1.0f, 0.0f, 0.0f) * osg::Matrix::rotate(_sunAngle, osg::Z_AXIS));
+            osg::Vec3(-1.0f, 0.0f, 0.0f) * osg::Matrix::rotate(_sunAngle, osg::Z_AXIS));
     }
 
     bool handle(const osgGA::GUIEventAdapter& ea, osgGA::GUIActionAdapter& aa)
@@ -195,11 +185,6 @@ protected:
     float _sunAngle;
 };
 
-// AWS Terrarium 高程瓦片模板。底图/标注层的真实 URL 在 createCustomPath 里硬编码，
-// 高程层的模板既放进 earthURLs 又用于启动预热，抽成常量避免两处写法漂移。
-static const std::string kTerrariumUrl =
-    "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
-
 static std::string createCustomPath(int type, const std::string& prefix, int x, int y, int z)
 {
     // 内部瓦片是 TMS（OriginBottomLeft=1，原点左下）。在线服务（ArcGIS / Terrarium）
@@ -214,15 +199,9 @@ static std::string createCustomPath(int type, const std::string& prefix, int x, 
     }
     else if (type == osgVerse::TileCallback::ELEVATION)
     {
-        // AWS Terrarium 高程最高约 z15。深瓦片（z>15）取 z15 **祖先瓦片**，createTile 用 elevScaleBias 采子区
-        // 一步烘焙正确高度 → 与 z15 父级连续、**消除 LOD 边界的视差错位/空白缝**。配套 EarthManipulator 的
-        // 地形地板（_terrainFloor）把相机挡在真实地形之上、防穿模。
-        if (z > 15)
-        {
-            int dz = z - 15, ax = x >> dz, ay = y >> dz;
-            int ayXYZ = (1 << 15) - 1 - ay;
-            return osgVerse::TileCallback::createPath(prefix, ax, ayXYZ, 15);
-        }
+        // AWS Terrarium 高程最高约 z15；z>15 请求必 404，会在主线程 DEFERRED 重试阻塞（近地卡顿元凶之一）
+        // 且刷屏 404。截断后深层瓦片自动复用父级 z15 高程（findAndUseParentData），地形不丢。
+        if (z > 15) return "";
         return osgVerse::TileCallback::createPath(prefix, x, yXYZ, z);
     }
     else if (type == osgVerse::TileCallback::USER)
@@ -251,55 +230,6 @@ static std::string createCustomPath(int type, const std::string& prefix, int x, 
     return osgVerse::TileCallback::createPath(prefix, x, y, z);
 }
 
-// 启动后台预热：把整个地球的低 LOD 瓦片（底图 + 标注 + 高程）拉进磁盘缓存。这样用户
-// 第一次平移/缩放外推到从未去过的区域时，粗略瓦片已在本地、立即出图，而不是干等网络
-// 流式加载。仅磁盘预热（GPU 常驻由 pager 的 targetMaximumNumberOfPageLOD=1500 负责）。
-// z0-4 = 1+4+16+64+256 = 341 块/层，三层约千块、十几 MB，几十秒后台拉完。
-// 数据量小、可后台跑，所以默认开启；EARTH_PREFETCH 指定最大 zoom（默认 4，"0" 关闭）。
-static void prefetchLowLODGlobe(int maxZ)
-{
-    if (maxZ < 0) return;
-    struct XYZ { int x, y, z; };
-    std::vector<XYZ> tiles;
-    for (int z = 0; z <= maxZ; ++z)
-    {
-        int n = 1 << z;
-        for (int y = 0; y < n; ++y)
-            for (int x = 0; x < n; ++x)
-                tiles.push_back(XYZ{ x, y, z });
-    }
-
-    // 多 worker 拉取：loadFileData 里的 HttpClient 是 thread_local，各 worker 自建长连接，
-    // 与 pager 的 20 HTTP 线程互不干扰；磁盘写已是 temp+rename 原子替换，并发安全。
-    std::atomic<size_t> next(0);
-    std::atomic<int> warmed(0);
-    const int kWorkers = 4;
-    std::vector<std::thread> pool;
-    for (int w = 0; w < kWorkers; ++w)
-    {
-        pool.push_back(std::thread([&]()
-        {
-            for (;;)
-            {
-                size_t i = next.fetch_add(1);
-                if (i >= tiles.size()) break;
-                const XYZ& t = tiles[i];
-                std::string ortho = createCustomPath(osgVerse::TileCallback::ORTHOPHOTO, "", t.x, t.y, t.z);
-                std::string label = createCustomPath(osgVerse::TileCallback::USER, "", t.x, t.y, t.z);
-                std::string elev = createCustomPath(osgVerse::TileCallback::ELEVATION, kTerrariumUrl, t.x, t.y, t.z);
-                // loadFileData 命中缓存即秒回，未命中才下载并写盘——天然去重。
-                if (!ortho.empty()) osgVerse::loadFileData(ortho);
-                if (!label.empty()) osgVerse::loadFileData(label);
-                if (!elev.empty()) osgVerse::loadFileData(elev);
-                warmed.fetch_add(1);
-            }
-        }));
-    }
-    for (size_t i = 0; i < pool.size(); ++i) pool[i].join();
-    OSG_NOTICE << "[prefetch] Warmed " << warmed.load() << " low-LOD globe tiles (z0-"
-               << maxZ << ", base+labels+elevation) into disk cache" << std::endl;
-}
-
 int main(int argc, char** argv)
 {
     osgViewer::Viewer viewer;
@@ -310,12 +240,6 @@ int main(int argc, char** argv)
 
     std::string mainFolder = BASE_DIR + "/models"; arguments.read("--folder", mainFolder);
     std::string skirtRatio = "0.05"; arguments.read("--skirt", skirtRatio);
-    // Terrain vertical exaggeration. 2.0 doubled real heights, which put high terrain (e.g.
-    // Kunming 1890 m -> 3780 m) above the camera and let it dip under the surface. Default to
-    // true scale (1.0); EARTH_ELEV_SCALE / --elev-scale override for those who want relief.
-    std::string elevScale = "1.0";
-    { const char* e = getenv("EARTH_ELEV_SCALE"); if (e && e[0]) elevScale = e; }
-    arguments.read("--elev-scale", elevScale);
     int w = 1920, h = 1080; arguments.read("--resolution", w, h);
     bool cityWaitingTiles = true, manipulatorCanThrow = false;
     if (arguments.read("--no-wait")) cityWaitingTiles = false;
@@ -331,10 +255,10 @@ int main(int argc, char** argv)
         " Orthophoto=google"          // non-empty placeholder; real lyrs=s URL built in createCustomPath
         " User=googleLabels"          // non-empty placeholder; real lyrs=h URL built in createCustomPath
         " Overlay=gibs"               // non-empty placeholder; real GIBS URL built in createCustomPath
-        " Elevation=" + kTerrariumUrl +
+        " Elevation=https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
         " OceanMask=mbtiles://" + mainFolder + "/Earth/Mask_lv3.mbtiles/{z}-{x}-{y}.tif"
         " ElevationEncoding=terrarium MaximumLevel=19 UseWebMercator=1 UseEarth3D=1 OriginBottomLeft=1"
-        " TileElevationScale=" + elevScale + " TileSkirtRatio=" + skirtRatio;
+        " TileElevationScale=2.0 TileSkirtRatio=" + skirtRatio;
     osg::ref_ptr<osgDB::Options> earthOptions = new osgDB::Options(earthURLs);
     earthOptions->setPluginData("UrlPathFunction", (void*)createCustomPath);
 
@@ -368,14 +292,6 @@ int main(int argc, char** argv)
     earthManipulator->setIntersectionMask(EARTH_INTERSECTION_MASK);
     earthManipulator->setWorldNode(earth.get());
     earthManipulator->setThrowAllowed(manipulatorCanThrow);
-    // Clamp how close the camera may get to the surface. Below ~the near-plane distance
-    // (far × nearFarRatio ≈ 130 m at planet scale) the close geometry falls in front of the
-    // near plane and renders as streaked garbage — a planet-scale depth-precision limit we
-    // can't fix without a logarithmic-depth pipeline. Keep the camera just above it. Default
-    // 150 m (street level, just clear of the near plane); EARTH_MIN_DIST overrides for tuning.
-    double minDist = 150.0; const char* mdEnv = getenv("EARTH_MIN_DIST");
-    if (mdEnv && mdEnv[0]) minDist = atof(mdEnv);
-    earthManipulator->setMinDistance(minDist);
 
     //osg::Vec3d pos = osgVerse::Coordinate::convertLLAtoECEF(
     //    osg::Vec3d(osg::inDegrees(0.0), osg::inDegrees(120.0), 10000.0));
@@ -459,14 +375,6 @@ int main(int argc, char** argv)
 
     if (gotoLat < 1.0e8)  // --goto 指定了起始视点
         earthManipulator->setByEye(osg::inDegrees(gotoLat), osg::inDegrees(gotoLon), gotoAltKm * 1000.0);
-    // 无头斜视调试：EARTH_TILT=<弧度> 给相机一个俯仰角，便于截图看 LOD 边界的缝/穿模（仅调试用）。
-    { const char* te = getenv("EARTH_TILT"); if (te && te[0]) earthManipulator->makeDeltaTilt(-(float)atof(te)); }
-
-    // 启动后台预热整个地球的低 LOD 瓦片（见 prefetchLowLODGlobe）。driver 线程 detach，
-    // 进程退出时被回收；磁盘写为原子替换，即使中途被杀也不会留下半写瓦片。
-    const char* prefetchEnv = getenv("EARTH_PREFETCH");
-    int prefetchZ = (prefetchEnv && prefetchEnv[0]) ? atoi(prefetchEnv) : 4;
-    if (prefetchZ > 0) std::thread(prefetchLowLODGlobe, prefetchZ).detach();
 
     // Headless auto-capture: render a fixed number of frames (letting the database
     // pager stream tiles) then grab the GL framebuffer to a PNG. Used to verify the
