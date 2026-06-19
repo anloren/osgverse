@@ -246,3 +246,38 @@ std::async，每次 fetch 重新握手 → **比串行还慢**。所以必须用
   渲染不做帧回读）。暖缓存下消失 → 确证非渲染回归。**交互验证时留意有无真镜像（预期不会）。**
 - 旋钮：`EARTH_TILE_POOL=0` 关闭并行（逐层串行）、`=N` 设池大小。若 google/aws 限流（下钻变慢/失败刷屏）
   就调小。
+
+---
+
+## bugfix：深瓦片（z>15）建成海平面平地 → 高海拔区视差错位（2026-06-19）
+
+**现象**：下钻到某些距离，出现深蓝（=未加载影像默认色）矩形瓦片**错位**，且**转动地球错位距离会变**。
+地点是昆明/滇池（地形 ~1890m）。**转动改变错位 = 视差 = 这些瓦片高度错了**（纯 2D/UV 错位不会随视角变）。
+
+**根因（与 #3 并行无关，是既存 bug）**：
+- AWS terrarium 高程最高 z15，`createCustomPath` 对 ELEVATION `z>15 return ""`。
+- `createLayerImage` URL 空 → `emptyPath=true`、返回 NULL → `createTile` 里 `elevImage=NULL`。
+- `createTileGeometry(elev=NULL)`：每个顶点 `altitude=0` → **整块建成海平面平地**（`TileCallback.cpp:247-256`）。
+- 本应复用父级高程的 `findAndUseParentData(ELEVATION)` 被 `!emptyPath` 门挡住（`updateLayerData`），
+  且 z>15 瓦片 elevation 状态保持 DONE（非 DEFERRED）→ `operator()` 根本不处理它。
+- 所以 z16-19 瓦片全是海平面平地。低海拔城市（旧金山 ~0m）看不出；昆明 1890m 时深瓦片比 z15 父级
+  低 1890m → 斜视下视差错位、且未加载影像呈深蓝块。perf commit `dfd8fd09` 注释声称"复用父级高程"
+  **其实从未生效**（aspirational）。
+
+**证据（受控实验，headless 自然下钻够不到 z16，故临时把 cutoff 降到 z>4 复现）**：
+cutoff=z>4 时 createTile 探针显示 z5-8 全部 `elevNull=1`（建成平地）；修复后 `[ELEVINHERIT]` 探针对
+z5/z6/z7 触发（继承父级高程）。两个探针证实"建平地"与"继承修复"都成立，无崩溃。
+
+**修复（2 处）**：
+- `ReaderWriterTMS::createTile`：elevation 无自有数据但**已配置**（`!elevHandler && !elevImage &&
+  !elevPath.empty()`）→ 标 DEFERRED、`allLayersDone=false`，逼 `operator()` 去继承（而非留平地）。
+  `elevPath` 空 = 没配高程 → 保持平地（无可继承）。
+- `TileCallback::updateLayerData`：把父级复用门由 `!emptyPath` 改成 `(id==ELEVATION || !emptyPath)`——
+  ELEVATION 即使 emptyPath 也复用父级（3D 瓦片必须有高度）；overlay/mask 在深 zoom 本就该消失，保留原门。
+- 机制复用现成的 `findAndUseParentData`（返回父 `_elevationRef` + 累积 UvOffset0 子区域）+
+  `updateTileGeometry`（按 scaleRange 采样父高程重置顶点，末尾 `va->dirty()/geom->dirtyBound()`）。
+  多级传播：z16 继承 z15、z17 继承 z16(=z15) … 高程是 z15 分辨率但**高度正确**（影像仍是各自 z 全分辨率）。
+
+**代价/留意**：每个 z>15 瓦片首帧在**主线程**做一次 findAndUseParentData+重置顶点（属 #2 主线程同步范畴）。
+深下钻瓦片多时可能轻微顿挫；这正是 backlog #2（异步层加载）要解决的。先建几何（平地）→ 首帧 operator()
+继承抬升，理论上有 1 帧平地闪烁，可忽略。**最终视觉需交互验证**（headless 够不到 z16 + 无斜视）。

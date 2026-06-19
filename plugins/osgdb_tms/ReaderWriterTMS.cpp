@@ -340,7 +340,14 @@ protected:
         layerTasks.push_back([&]() { overlayImage = tileCB->createLayerImage(osgVerse::TileCallback::OVERLAY, emptyPathO, opt); });
         LayerLoadPool::instance().runAll(layerTasks);
 
-        if (!elevHandler && !elevImage && !emptyPathE)
+        // Elevation is special: a 3D tile MUST have height data. If this tile has none of
+        // its own — z>15 has no AWS terrarium data (createCustomPath returns ""), or a
+        // transient fetch failure — defer it so operator()/updateLayerData inherits the
+        // parent tile's elevation. Otherwise the tile is built flat at sea level, which on
+        // high terrain (e.g. Kunming ~1890 m) sinks deep tiles below their z15 parent and
+        // shows them parallax-misaligned. elevPath empty = elevation not configured at all
+        // → leave flat (nothing to inherit).
+        if (!elevHandler && !elevImage && !elevPath.empty())
             { tileCB->setLayerPathState(osgVerse::TileCallback::ELEVATION, failState); allLayersDone = false; }
         if (!orthImage && !emptyPath0)
             { tileCB->setLayerPathState(osgVerse::TileCallback::ORTHOPHOTO, failState); allLayersDone = false; }

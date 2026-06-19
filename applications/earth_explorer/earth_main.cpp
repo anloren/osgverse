@@ -208,8 +208,11 @@ static std::string createCustomPath(int type, const std::string& prefix, int x, 
     }
     else if (type == osgVerse::TileCallback::ELEVATION)
     {
-        // AWS Terrarium 高程最高约 z15；z>15 请求必 404，会在主线程 DEFERRED 重试阻塞（近地卡顿元凶之一）
-        // 且刷屏 404。截断后深层瓦片自动复用父级 z15 高程（findAndUseParentData），地形不丢。
+        // AWS Terrarium 高程最高约 z15；z>15 请求必 404，会刷屏 + 主线程 DEFERRED 重试阻塞，故截断。
+        // 截断后这些深瓦片**没有自己的高程数据** → createTile 把它们标记 DEFERRED（见 ReaderWriterTMS：
+        // `!elevHandler && !elevImage && !elevPath.empty()`），operator()/updateLayerData 复用**父级 z15
+        // 高程**（findAndUseParentData，对 ELEVATION 放行 emptyPath）。否则深瓦片会被建成海平面平地，
+        // 在高海拔地区（如昆明 ~1890m）下沉到 z15 父级之下、随视角变化呈视差错位（曾出现的 bug）。
         if (z > 15) return "";
         return osgVerse::TileCallback::createPath(prefix, x, yXYZ, z);
     }

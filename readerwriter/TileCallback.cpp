@@ -572,7 +572,11 @@ bool TileCallback::updateLayerData(osg::NodeVisitor* nv, osg::Node* node, LayerT
         tex = createLayerImage(id, emptyPath, opt); texUnit = 2; break;
     }
 
-    if (!tex && !emptyPath && node->getNumParents() > 0)
+    // ELEVATION always inherits the parent's height when it has none of its own (z>15
+    // cutoff, or transient failure) — a 3D tile can't be left flat at sea level. Other
+    // layers (overlay/mask) legitimately disappear at deep zoom, so they keep the
+    // !emptyPath guard (an empty path means "this layer has no data here", not "reuse").
+    if (!tex && node->getNumParents() > 0 && (id == ELEVATION || !emptyPath))
         tex = findAndUseParentData(id, node->getParent(0));
     if (tex.valid())
     {
