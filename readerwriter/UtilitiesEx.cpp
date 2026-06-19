@@ -20,6 +20,8 @@
 #include <cctype>
 #include <fstream>
 #include <functional>
+#include <thread>
+#include <cstdio>
 
 #include "pipeline/Global.h"
 #include "pipeline/Utilities.h"
@@ -603,8 +605,20 @@ namespace osgVerse
             if (!buffer.empty())
             {
                 osgDB::makeDirectory(tileCacheDir());
-                std::ofstream out(cf.c_str(), std::ios::binary);
-                if (out) out.write((const char*)buffer.data(), buffer.size());
+                // Write to a per-thread temp file then atomically rename into place.
+                // Tiles are immutable, but multiple fetchers can race on the same URL
+                // (the pager's HTTP threads plus the startup low-LOD prefetch). A plain
+                // truncating write would let a concurrent reader observe a half-written
+                // tile; rename() is atomic so a reader sees either the old absence or the
+                // complete file. On POSIX rename overwrites; on Windows a rename onto an
+                // existing file fails (someone beat us) — just drop our temp in that case.
+                std::string tmp = cf + ".tmp." + std::to_string(
+                    (unsigned long long)std::hash<std::thread::id>()(std::this_thread::get_id()));
+                {
+                    std::ofstream out(tmp.c_str(), std::ios::binary);
+                    if (out) out.write((const char*)buffer.data(), buffer.size());
+                }
+                if (::rename(tmp.c_str(), cf.c_str()) != 0) ::remove(tmp.c_str());
                 std::ofstream mo((cf + ".mime").c_str()); if (mo) mo << mimeType;
             }
 #endif

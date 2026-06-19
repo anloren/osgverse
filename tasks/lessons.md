@@ -176,3 +176,34 @@ int yXYZ = (1 << z) - 1 - y;  // == 2^z - 1 - y
 - **真正干净的修法（未做）**：主动在 >85° 填一个平极冠（冰白 disc），既不星芒也不空洞——属于新增几何、风险较高，留作后续单独立项。
 - <85° 区域（全球/中纬/高纬陆地）三种状态下都无回归——截断只在 >85.05° 触发。
 - **验证铁律**：极地/投影类改动必须看**低 zoom 中纬度陆地**（如 --goto 45 12 6000 全欧洲）+ 极点正上方（--goto 89.5 0 5000），不能只看高 zoom（单瓦片跨度极小，gd 非线性可忽略，看不出问题）。
+
+---
+
+## feature：启动预热整个地球低 LOD 瓦片（backlog #1，2026-06-19）
+
+**目的**：用户第一次平移/缩放外推到从未去过的区域时，粗略瓦片已在磁盘缓存、立即出图，
+而不是干等网络流式加载。仅**磁盘预热**——GPU 常驻仍靠 pager 的 `targetMaximumNumberOfPageLOD=1500`
+（两者配合才完整：预热保证盘上有数据，targetMax 保证已加载的低/中 LOD 不被 LRU 过早卸载）。
+
+**实现**：`applications/earth_explorer/earth_main.cpp`
+- `prefetchLowLODGlobe(maxZ)`：枚举 z0..maxZ 全部瓦片，对每块拉 **底图(ORTHOPHOTO)+标注(USER)+高程(ELEVATION)**
+  三层 URL（复用 `createCustomPath`，与渲染路径同源，URL 永不漂移），调 `osgVerse::loadFileData()` 写盘。
+  4 个 worker 线程共享原子游标分摊；`loadFileData` 命中缓存即秒回 → 天然去重、重跑零浪费。
+- main 里 `std::thread(prefetchLowLODGlobe, prefetchZ).detach()`，driver 线程 detach，进程退出即回收。
+- 环境变量 `EARTH_PREFETCH`：预热的**最大 zoom**，默认 `4`（z0-4 = 341 块/层 ×3 层 ≈ 千块、十几 MB、几十秒），
+  `0` 关闭。瓦片数 = Σ 4^z = (4^(maxZ+1)−1)/3。
+- 高程 URL 模板抽成文件级常量 `kTerrariumUrl`，earthURLs 与预热两处共用。
+
+**并发安全（必读）**：预热 worker 与 pager 的 20 个 HTTP 线程会**同时**抢同一 URL。原先 `loadFileData`
+写缓存是**截断式直写**（`UtilitiesEx.cpp`），并发下读到半写瓦片会坏图。本次改为
+**per-thread 临时文件 + `rename()` 原子替换**（POSIX 覆盖、Windows rename-onto-existing 失败则删临时）。
+`loadFileData` 里的 `HttpClient` 是 `thread_local`，每 worker 自建长连接，与 pager 互不干扰。
+（注：lessons 早先写「已用 .tmp 原子替换」其实是**陈述性愿望、代码当时并未实现**，本次才真正落地。）
+
+**验证（headless）**：用独立缓存目录 `EARTH_TILE_CACHE=/tmp/...` + `EARTH_PREFETCH=2`（21 块/层，几秒跑完）：
+- 日志出现 `[prefetch] Warmed 21 low-LOD globe tiles (z0-2, base+labels+elevation)` ✓
+- 缓存目录从空长到 67 个 `.tile`（预热 21×3=63 + 渲染视图补几块）✓
+- **0 个残留 `.tmp`** → 原子 rename 生效 ✓
+- 截图地球正常（非洲/大西洋、大气、ImGui 面板齐全）、GL 4.1/GLSL410、无 fatal ✓
+- 默认 z4（不设 env）跑短窗口：detach 线程未跑完即被进程退出杀掉，**无崩溃、无残留**（原子写保证）✓
+- 注：z4（1023 fetch）在 headless ~280 帧窗口内跑不完，故默认跑看不到 "Warmed" 完成日志，属正常。

@@ -16,6 +16,7 @@
 #include <readerwriter/EarthManipulator.h>
 #include <readerwriter/TileCallback.h>
 #include <readerwriter/FileCache.h>
+#include <readerwriter/Utilities.h>
 #include <pipeline/Pipeline.h>
 #include "EarthControlUI.h"
 #include "LayerManager.h"
@@ -23,6 +24,9 @@
 #include <iostream>
 #include <sstream>
 #include <ctime>
+#include <thread>
+#include <atomic>
+#include <vector>
 
 #ifdef OSG_LIBRARY_STATIC
 USE_OSG_PLUGINS()
@@ -185,6 +189,11 @@ protected:
     float _sunAngle;
 };
 
+// AWS Terrarium 高程瓦片模板。底图/标注层的真实 URL 在 createCustomPath 里硬编码，
+// 高程层的模板既放进 earthURLs 又用于启动预热，抽成常量避免两处写法漂移。
+static const std::string kTerrariumUrl =
+    "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
+
 static std::string createCustomPath(int type, const std::string& prefix, int x, int y, int z)
 {
     // 内部瓦片是 TMS（OriginBottomLeft=1，原点左下）。在线服务（ArcGIS / Terrarium）
@@ -230,6 +239,55 @@ static std::string createCustomPath(int type, const std::string& prefix, int x, 
     return osgVerse::TileCallback::createPath(prefix, x, y, z);
 }
 
+// 启动后台预热：把整个地球的低 LOD 瓦片（底图 + 标注 + 高程）拉进磁盘缓存。这样用户
+// 第一次平移/缩放外推到从未去过的区域时，粗略瓦片已在本地、立即出图，而不是干等网络
+// 流式加载。仅磁盘预热（GPU 常驻由 pager 的 targetMaximumNumberOfPageLOD=1500 负责）。
+// z0-4 = 1+4+16+64+256 = 341 块/层，三层约千块、十几 MB，几十秒后台拉完。
+// 数据量小、可后台跑，所以默认开启；EARTH_PREFETCH 指定最大 zoom（默认 4，"0" 关闭）。
+static void prefetchLowLODGlobe(int maxZ)
+{
+    if (maxZ < 0) return;
+    struct XYZ { int x, y, z; };
+    std::vector<XYZ> tiles;
+    for (int z = 0; z <= maxZ; ++z)
+    {
+        int n = 1 << z;
+        for (int y = 0; y < n; ++y)
+            for (int x = 0; x < n; ++x)
+                tiles.push_back(XYZ{ x, y, z });
+    }
+
+    // 多 worker 拉取：loadFileData 里的 HttpClient 是 thread_local，各 worker 自建长连接，
+    // 与 pager 的 20 HTTP 线程互不干扰；磁盘写已是 temp+rename 原子替换，并发安全。
+    std::atomic<size_t> next(0);
+    std::atomic<int> warmed(0);
+    const int kWorkers = 4;
+    std::vector<std::thread> pool;
+    for (int w = 0; w < kWorkers; ++w)
+    {
+        pool.push_back(std::thread([&]()
+        {
+            for (;;)
+            {
+                size_t i = next.fetch_add(1);
+                if (i >= tiles.size()) break;
+                const XYZ& t = tiles[i];
+                std::string ortho = createCustomPath(osgVerse::TileCallback::ORTHOPHOTO, "", t.x, t.y, t.z);
+                std::string label = createCustomPath(osgVerse::TileCallback::USER, "", t.x, t.y, t.z);
+                std::string elev = createCustomPath(osgVerse::TileCallback::ELEVATION, kTerrariumUrl, t.x, t.y, t.z);
+                // loadFileData 命中缓存即秒回，未命中才下载并写盘——天然去重。
+                if (!ortho.empty()) osgVerse::loadFileData(ortho);
+                if (!label.empty()) osgVerse::loadFileData(label);
+                if (!elev.empty()) osgVerse::loadFileData(elev);
+                warmed.fetch_add(1);
+            }
+        }));
+    }
+    for (size_t i = 0; i < pool.size(); ++i) pool[i].join();
+    OSG_NOTICE << "[prefetch] Warmed " << warmed.load() << " low-LOD globe tiles (z0-"
+               << maxZ << ", base+labels+elevation) into disk cache" << std::endl;
+}
+
 int main(int argc, char** argv)
 {
     osgViewer::Viewer viewer;
@@ -255,7 +313,7 @@ int main(int argc, char** argv)
         " Orthophoto=google"          // non-empty placeholder; real lyrs=s URL built in createCustomPath
         " User=googleLabels"          // non-empty placeholder; real lyrs=h URL built in createCustomPath
         " Overlay=gibs"               // non-empty placeholder; real GIBS URL built in createCustomPath
-        " Elevation=https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
+        " Elevation=" + kTerrariumUrl +
         " OceanMask=mbtiles://" + mainFolder + "/Earth/Mask_lv3.mbtiles/{z}-{x}-{y}.tif"
         " ElevationEncoding=terrarium MaximumLevel=19 UseWebMercator=1 UseEarth3D=1 OriginBottomLeft=1"
         " TileElevationScale=2.0 TileSkirtRatio=" + skirtRatio;
@@ -375,6 +433,12 @@ int main(int argc, char** argv)
 
     if (gotoLat < 1.0e8)  // --goto 指定了起始视点
         earthManipulator->setByEye(osg::inDegrees(gotoLat), osg::inDegrees(gotoLon), gotoAltKm * 1000.0);
+
+    // 启动后台预热整个地球的低 LOD 瓦片（见 prefetchLowLODGlobe）。driver 线程 detach，
+    // 进程退出时被回收；磁盘写为原子替换，即使中途被杀也不会留下半写瓦片。
+    const char* prefetchEnv = getenv("EARTH_PREFETCH");
+    int prefetchZ = (prefetchEnv && prefetchEnv[0]) ? atoi(prefetchEnv) : 4;
+    if (prefetchZ > 0) std::thread(prefetchLowLODGlobe, prefetchZ).detach();
 
     // Headless auto-capture: render a fixed number of frames (letting the database
     // pager stream tiles) then grab the GL framebuffer to a PNG. Used to verify the
