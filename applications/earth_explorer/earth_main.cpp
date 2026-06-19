@@ -315,6 +315,10 @@ int main(int argc, char** argv)
     // keep-alive connection reuse in loadFileData) instead of trickling in one host
     // round-trip at a time.
     pager->setDoPreCompile(true); pager->setUpThreads(20, 16);
+    // 默认 targetMaximumNumberOfPageLOD=300，低于整个地球 z1-4(=340 块)就开始 LRU 过期卸载：
+    // 深 zoom 进某地后，其它区域的中低 LOD 瓦片被卸载，缩放外推回全球时它们正在重载 → 露出默认
+    // 底图("半个地球橙色")。提高上限让覆盖全球的低/中 LOD 瓦片常驻，外推秒回、不再重载露馅。
+    pager->setTargetMaximumNumberOfPageLOD(1500);
 
     viewer.addEventHandler(new EnvironmentHandler(&earthRenderingUtils, mainFolder));
     viewer.addEventHandler(new osgViewer::StatsHandler);

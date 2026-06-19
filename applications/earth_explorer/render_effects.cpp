@@ -86,9 +86,12 @@ std::vector<osg::Camera*> configureEarthRendering(
     earthCamera->setViewport(0, 0, w, h);
     earthCamera->addChild(earth);
 
-    osg::Texture* defTex0 = osgVerse::createDefaultTexture(osg::Vec4(1.0f, 1.0f, 1.0f, 1.0f));
-    osg::Texture* defTex1 = osgVerse::createDefaultTexture(osg::Vec4(0.0f, 0.0f, 0.0f, 0.0f));
-    earthRenderingUtils.applyToGlobe(earthCamera->getOrCreateStateSet(), defTex0, defTex0, defTex1,
+    osg::Texture* defTex0 = osgVerse::createDefaultTexture(osg::Vec4(1.0f, 1.0f, 1.0f, 1.0f));   // mask 默认=陆地(白)，勿改
+    osg::Texture* defTex1 = osgVerse::createDefaultTexture(osg::Vec4(0.0f, 0.0f, 0.0f, 0.0f));   // 叠加层默认=透明
+    // 未加载影像的底图默认从白改为深海蓝：白色经大气散射在向阳侧会被染成刺眼橙色（缩放外推时
+    // 大块中低 LOD 瓦片正在重载就会出现"半个地球橙色"）。深色让加载中的瓦片看起来像暗海/阴影。
+    osg::Texture* defBase = osgVerse::createDefaultTexture(osg::Vec4(0.03f, 0.06f, 0.10f, 1.0f));
+    earthRenderingUtils.applyToGlobe(earthCamera->getOrCreateStateSet(), defBase, defTex0, defTex1,
         osgDB::readShaderFile(osg::Shader::VERTEX, SHADER_DIR + "scattering_globe.vert.glsl"),
         osgDB::readShaderFile(osg::Shader::FRAGMENT, SHADER_DIR + "scattering_globe.frag.glsl"));
     root->addChild(earthCamera); cameras.push_back(earthCamera);
