@@ -286,6 +286,10 @@ namespace osgVerse
         double _terrainFloor; // smoothed min eye-distance from real terrain (0 = none); applied only in the
                               // view matrix as max(_distance,_terrainFloor) so the camera can't sink into
                               // elevated terrain. _distance (user zoom) is never modified -> no oscillation.
+        double _terrainFloorRadius; // smoothed MIN geocentric radius the eye must keep (terrainTop + minDist,
+                              // 0 = none). The distance floor above only lifts correctly top-down; when the
+                              // view is tilted, extra distance moves the eye sideways and it still sinks below
+                              // ground. Pushing the eye radially out to this radius fixes penetration at any tilt.
         float _tilt;  // Vertical angle to the horizon
 
         unsigned int _intersectionMask;  // Mask for intersection with the earth

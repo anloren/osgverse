@@ -53,8 +53,10 @@ public:
     :   _earthData(eao), _mainFolder(folder), _pressingKey(0), _pathIndex(0), _sunAngle(0.0f)
     {
         _earthData->commonUniforms["OceanOpaque"]->set(0.0f);
+        // Sun toward the default camera hemisphere (+X = prime meridian) so the globe launches
+        // lit, not in red sunset/terminator. Matches the EarthControlUI default (Az0/El0 -> +X).
         _earthData->commonUniforms["WorldSunDir"]->set(
-            osg::Vec3(-1.0f, 0.0f, 0.0f) * osg::Matrix::rotate(_sunAngle, osg::Z_AXIS));
+            osg::Vec3(1.0f, 0.0f, 0.0f) * osg::Matrix::rotate(_sunAngle, osg::Z_AXIS));
     }
 
     bool handle(const osgGA::GUIEventAdapter& ea, osgGA::GUIActionAdapter& aa)
