@@ -252,7 +252,9 @@ osg::Geometry* TileCallback::createTileGeometry(osg::Matrix& outMatrix, osg::Tex
                     // vertex far into space — a thin spike/line shooting off the globe. Fall
                     // back to the neighbour's height instead. (Non-float colour layers read in
                     // [0,1], so this only ever clamps the real-metre terrarium path.)
-                    if (elevColor[0] > 15000.0 || elevColor[0] < -15000.0) { altitude = lastAlt; }
+                    // Negated range so NaN is caught too (NaN fails both >/<, so the old
+                    // `>15000 || <-15000` let NaN through -> NaN vertex -> flickering spike lines).
+                    if (!(elevColor[0] > -15000.0 && elevColor[0] < 15000.0)) { altitude = lastAlt; }
                     else altitude = (useRealElevation ? elevColor[0] : mapAltitude(elevColor)) * _elevationScale;
                 }
 
@@ -306,7 +308,9 @@ osg::Geometry* TileCallback::createTileGeometry(osg::Matrix& outMatrix, osg::Tex
                     // vertex far into space — a thin spike/line shooting off the globe. Fall
                     // back to the neighbour's height instead. (Non-float colour layers read in
                     // [0,1], so this only ever clamps the real-metre terrarium path.)
-                    if (elevColor[0] > 15000.0 || elevColor[0] < -15000.0) { altitude = lastAlt; }
+                    // Negated range so NaN is caught too (NaN fails both >/<, so the old
+                    // `>15000 || <-15000` let NaN through -> NaN vertex -> flickering spike lines).
+                    if (!(elevColor[0] > -15000.0 && elevColor[0] < 15000.0)) { altitude = lastAlt; }
                     else altitude = (useRealElevation ? elevColor[0] : mapAltitude(elevColor)) * elevationScale2D;
                 }
 
@@ -381,7 +385,9 @@ void TileCallback::updateTileGeometry(osg::Geometry* geom, osg::Texture* elevati
                     // vertex far into space — a thin spike/line shooting off the globe. Fall
                     // back to the neighbour's height instead. (Non-float colour layers read in
                     // [0,1], so this only ever clamps the real-metre terrarium path.)
-                    if (elevColor[0] > 15000.0 || elevColor[0] < -15000.0) { altitude = lastAlt; }
+                    // Negated range so NaN is caught too (NaN fails both >/<, so the old
+                    // `>15000 || <-15000` let NaN through -> NaN vertex -> flickering spike lines).
+                    if (!(elevColor[0] > -15000.0 && elevColor[0] < 15000.0)) { altitude = lastAlt; }
                     else altitude = (useRealElevation ? elevColor[0] : mapAltitude(elevColor)) * _elevationScale;
                 }
 
@@ -423,7 +429,9 @@ void TileCallback::updateTileGeometry(osg::Geometry* geom, osg::Texture* elevati
                     // vertex far into space — a thin spike/line shooting off the globe. Fall
                     // back to the neighbour's height instead. (Non-float colour layers read in
                     // [0,1], so this only ever clamps the real-metre terrarium path.)
-                    if (elevColor[0] > 15000.0 || elevColor[0] < -15000.0) { altitude = lastAlt; }
+                    // Negated range so NaN is caught too (NaN fails both >/<, so the old
+                    // `>15000 || <-15000` let NaN through -> NaN vertex -> flickering spike lines).
+                    if (!(elevColor[0] > -15000.0 && elevColor[0] < 15000.0)) { altitude = lastAlt; }
                     else altitude = (useRealElevation ? elevColor[0] : mapAltitude(elevColor)) * elevationScale2D;
                 }
 
