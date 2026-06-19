@@ -208,16 +208,11 @@ static std::string createCustomPath(int type, const std::string& prefix, int x, 
     }
     else if (type == osgVerse::TileCallback::ELEVATION)
     {
-        // AWS Terrarium 高程最高约 z15。深瓦片（z>15）没有自己的高程数据：直接取 z15 **祖先瓦片**，
-        // 由 createTile 计算对应子区（elevScaleBias）在建几何时一步采样 → 深地形拿到正确高度（z15 分辨率）。
-        // 这取代了原来"建平地→运行时重置几何"的两步继承（其多级 UV 累加依赖父级 uniform、有时序竞态，
-        // 会造成尖刺/闪烁/黑洞/道路变形）。祖先瓦片走 z15 的 XYZ Y 翻转。
-        if (z > 15)
-        {
-            int dz = z - 15, ax = x >> dz, ay = y >> dz;
-            int ayXYZ = (1 << 15) - 1 - ay;
-            return osgVerse::TileCallback::createPath(prefix, ax, ayXYZ, 15);
-        }
+        // AWS Terrarium 高程最高约 z15。深瓦片（z>15）一律**建成平地**（返回 ""→ elevImage NULL → 海平面）。
+        // 取舍：放弃深 zoom 的 3D 起伏（影像仍全分辨率），换来稳定——深瓦片在海平面、相机(≥150m 椭球高)恒在其上，
+        // **不会穿模**（无尖刺扇/穿透）。给深瓦片真实高度需要"相机-地形碰撞 + 动态近远平面"子系统（无头无法验证），
+        // 留作单独立项；曾试过的"祖先采样/运行时继承"在 z16-19 会引发穿模/尖刺/闪烁，已放弃。
+        if (z > 15) return "";
         return osgVerse::TileCallback::createPath(prefix, x, yXYZ, z);
     }
     else if (type == osgVerse::TileCallback::USER)
