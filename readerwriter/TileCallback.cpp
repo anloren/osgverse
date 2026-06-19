@@ -247,7 +247,12 @@ osg::Geometry* TileCallback::createTileGeometry(osg::Matrix& outMatrix, osg::Tex
                 if (elevation)
                 {
                     osg::Vec4 elevColor = elevation->getColor(uv);
-                    if (elevColor[0] > 10e6 || elevColor[0] < -10e6) { altitude = lastAlt; }
+                    // Reject out-of-range elevation (real Earth is ~ -11 km..+9 km). The old
+                    // ±10e6 bound let garbage up to ~thousands of km through, which displaced a
+                    // vertex far into space — a thin spike/line shooting off the globe. Fall
+                    // back to the neighbour's height instead. (Non-float colour layers read in
+                    // [0,1], so this only ever clamps the real-metre terrarium path.)
+                    if (elevColor[0] > 15000.0 || elevColor[0] < -15000.0) { altitude = lastAlt; }
                     else altitude = (useRealElevation ? elevColor[0] : mapAltitude(elevColor)) * _elevationScale;
                 }
 
@@ -296,7 +301,12 @@ osg::Geometry* TileCallback::createTileGeometry(osg::Matrix& outMatrix, osg::Tex
                 if (elevation)
                 {
                     osg::Vec4 elevColor = elevation->getColor(uv);
-                    if (elevColor[0] > 10e6 || elevColor[0] < -10e6) { altitude = lastAlt; }
+                    // Reject out-of-range elevation (real Earth is ~ -11 km..+9 km). The old
+                    // ±10e6 bound let garbage up to ~thousands of km through, which displaced a
+                    // vertex far into space — a thin spike/line shooting off the globe. Fall
+                    // back to the neighbour's height instead. (Non-float colour layers read in
+                    // [0,1], so this only ever clamps the real-metre terrarium path.)
+                    if (elevColor[0] > 15000.0 || elevColor[0] < -15000.0) { altitude = lastAlt; }
                     else altitude = (useRealElevation ? elevColor[0] : mapAltitude(elevColor)) * elevationScale2D;
                 }
 
@@ -366,7 +376,12 @@ void TileCallback::updateTileGeometry(osg::Geometry* geom, osg::Texture* elevati
                     uv[1] = uv[1] * scaleRange[3] + scaleRange[1];
 
                     osg::Vec4 elevColor = elevation->getColor(uv);
-                    if (elevColor[0] > 10e6 || elevColor[0] < -10e6) { altitude = lastAlt; }
+                    // Reject out-of-range elevation (real Earth is ~ -11 km..+9 km). The old
+                    // ±10e6 bound let garbage up to ~thousands of km through, which displaced a
+                    // vertex far into space — a thin spike/line shooting off the globe. Fall
+                    // back to the neighbour's height instead. (Non-float colour layers read in
+                    // [0,1], so this only ever clamps the real-metre terrarium path.)
+                    if (elevColor[0] > 15000.0 || elevColor[0] < -15000.0) { altitude = lastAlt; }
                     else altitude = (useRealElevation ? elevColor[0] : mapAltitude(elevColor)) * _elevationScale;
                 }
 
@@ -403,7 +418,12 @@ void TileCallback::updateTileGeometry(osg::Geometry* geom, osg::Texture* elevati
                     uv[1] = uv[1] * scaleRange[3] + scaleRange[1];
 
                     osg::Vec4 elevColor = elevation->getColor(uv);
-                    if (elevColor[0] > 10e6 || elevColor[0] < -10e6) { altitude = lastAlt; }
+                    // Reject out-of-range elevation (real Earth is ~ -11 km..+9 km). The old
+                    // ±10e6 bound let garbage up to ~thousands of km through, which displaced a
+                    // vertex far into space — a thin spike/line shooting off the globe. Fall
+                    // back to the neighbour's height instead. (Non-float colour layers read in
+                    // [0,1], so this only ever clamps the real-metre terrarium path.)
+                    if (elevColor[0] > 15000.0 || elevColor[0] < -15000.0) { altitude = lastAlt; }
                     else altitude = (useRealElevation ? elevColor[0] : mapAltitude(elevColor)) * elevationScale2D;
                 }
 

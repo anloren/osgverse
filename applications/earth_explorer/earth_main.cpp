@@ -301,6 +301,12 @@ int main(int argc, char** argv)
 
     std::string mainFolder = BASE_DIR + "/models"; arguments.read("--folder", mainFolder);
     std::string skirtRatio = "0.05"; arguments.read("--skirt", skirtRatio);
+    // Terrain vertical exaggeration. 2.0 doubled real heights, which put high terrain (e.g.
+    // Kunming 1890 m -> 3780 m) above the camera and let it dip under the surface. Default to
+    // true scale (1.0); EARTH_ELEV_SCALE / --elev-scale override for those who want relief.
+    std::string elevScale = "1.0";
+    { const char* e = getenv("EARTH_ELEV_SCALE"); if (e && e[0]) elevScale = e; }
+    arguments.read("--elev-scale", elevScale);
     int w = 1920, h = 1080; arguments.read("--resolution", w, h);
     bool cityWaitingTiles = true, manipulatorCanThrow = false;
     if (arguments.read("--no-wait")) cityWaitingTiles = false;
@@ -319,7 +325,7 @@ int main(int argc, char** argv)
         " Elevation=" + kTerrariumUrl +
         " OceanMask=mbtiles://" + mainFolder + "/Earth/Mask_lv3.mbtiles/{z}-{x}-{y}.tif"
         " ElevationEncoding=terrarium MaximumLevel=19 UseWebMercator=1 UseEarth3D=1 OriginBottomLeft=1"
-        " TileElevationScale=2.0 TileSkirtRatio=" + skirtRatio;
+        " TileElevationScale=" + elevScale + " TileSkirtRatio=" + skirtRatio;
     osg::ref_ptr<osgDB::Options> earthOptions = new osgDB::Options(earthURLs);
     earthOptions->setPluginData("UrlPathFunction", (void*)createCustomPath);
 
