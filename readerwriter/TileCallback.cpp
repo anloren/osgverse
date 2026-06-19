@@ -225,6 +225,7 @@ osg::Geometry* TileCallback::createTileGeometry(osg::Matrix& outMatrix, osg::Tex
     osg::ref_ptr<osg::Vec3Array> na = new osg::Vec3Array(numVertices);
     osg::ref_ptr<osg::Vec2Array> ta = new osg::Vec2Array(numVertices);
     osg::ref_ptr<osg::Vec4Array> ca = new osg::Vec4Array(numVertices);
+    double minAlt = 1e9, maxAlt = -1e9;  // elevation range (function scope) -> sizes the crack-hiding skirt
     if (!_flatten)
     {
         osg::Vec3d center = adjustLatitudeLongitudeAltitude((tileMin + tileMax) * 0.5, _useWebMercator);
@@ -264,6 +265,7 @@ osg::Geometry* TileCallback::createTileGeometry(osg::Matrix& outMatrix, osg::Tex
                     else altitude = (useRealElevation ? elevColor[0] : mapAltitude(elevColor)) * _elevationScale;
                 }
 
+                if (altitude < minAlt) minAlt = altitude; if (altitude > maxAlt) maxAlt = altitude;
                 osg::Vec3d lla = adjustLatitudeLongitudeAltitude(
                     tileMin + osg::Vec3d((double)x * invW, (double)y * invH, altitude), _useWebMercator);
                 osg::Vec3d ecef = convertToECEF(lla); lastAlt = altitude;
@@ -349,6 +351,8 @@ osg::Geometry* TileCallback::createTileGeometry(osg::Matrix& outMatrix, osg::Tex
         geom->setVertexAttribBinding(GLOBE_ATTRIBUTE_INDEX, osg::Geometry::BIND_PER_VERTEX);
     }
     geom->addPrimitiveSet(de.get());
+    if (!_flatten)
+        const_cast<TileCallback*>(this)->_tileElevRange = (maxAlt > minAlt) ? (float)(maxAlt - minAlt) : 0.0f;
     if (!_flatten && _skirtRatio > 0.0f)
         updateSkirtData(geom, osg::inDegrees(tileMax.y() - tileMin.y()), true);
     return geom;
@@ -455,7 +459,13 @@ void TileCallback::updateTileGeometry(osg::Geometry* geom, osg::Texture* elevati
 
 void TileCallback::updateSkirtData(osg::Geometry* geom, double tileRefSize, bool addingTriangles) const
 {
+    // Skirt must be tall enough to hide cracks at tile edges. The tile-size term handles the
+    // T-junction between LODs; the elevation-range term handles steep terrain / coastlines where
+    // adjacent tiles differ by far more than the tile's own width (a fixed-ratio skirt left
+    // black gaps there). 1.5x gives margin for the coarser neighbour reaching a bit further.
     double skirtHeight = osg::WGS_84_RADIUS_POLAR * tileRefSize * _skirtRatio;
+    double elevSkirt = (double)_tileElevRange * 1.5;
+    if (elevSkirt > skirtHeight) skirtHeight = elevSkirt;
     unsigned int numRows = TILE_ROWS, numCols = TILE_COLS;
     unsigned int vi = numRows * numCols;
     if (!geom) return; else if (!geom->getVertexArray() || geom->getNumPrimitiveSets() == 0) return;
