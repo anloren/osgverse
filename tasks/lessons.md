@@ -207,3 +207,42 @@ int yXYZ = (1 << z) - 1 - y;  // == 2^z - 1 - y
 - 截图地球正常（非洲/大西洋、大气、ImGui 面板齐全）、GL 4.1/GLSL410、无 fatal ✓
 - 默认 z4（不设 env）跑短窗口：detach 线程未跑完即被进程退出杀掉，**无崩溃、无残留**（原子写保证）✓
 - 注：z4（1023 fetch）在 headless ~280 帧窗口内跑不完，故默认跑看不到 "Warmed" 完成日志，属正常。
+
+---
+
+## feature：瓦片 5 层并行加载（backlog #3，2026-06-19）
+
+**目的**：每块瓦片的 5 层（elevation/ortho/mask/labels/overlay）原本在 pager DR 线程上**串行**
+网络/缓存拉取（`ReaderWriterTMS::createTile`）。深 zoom 下钻是**单点串行临界路径**（每级一块、
+子级等父级），把一块的各层并行拉取 → 每块墙钟≈降到最慢单层。实测冷缓存下钻同样 16.8s 帧预算内
+缓存瓦片数 **528（并行）vs 128（串行），~4× 吞吐**。
+
+**关键坑：不能用 ephemeral 线程**。`loadFileData` 的 keep-alive 是 **thread_local** 长连接，
+TLS 握手 ~0.6s（占每块一半以上成本）只在每个 worker 首次付一次。若每层 spawn 临时 std::thread/
+std::async，每次 fetch 重新握手 → **比串行还慢**。所以必须用**常驻 worker 线程池**让连接复用。
+
+**实现**：`plugins/osgdb_tms/ReaderWriterTMS.cpp`
+- 匿名命名空间 `LayerLoadPool`：常驻 worker（数量 `EARTH_TILE_POOL`，默认 8，`0` 关闭=回到逐层
+  inline 串行的原行为）。Meyers 单例**故意 leak**（`new` 不 delete）+ worker `detach()`，避免退出时
+  析构队列被 detached worker 访问的 use-after-free。
+- `runAll(tasks)`：派发 tasks[1..] 到池、tasks[0] 在调用方 pager 线程 inline 跑（自身 keep-alive 不闲置），
+  countdown latch 等齐。空/单任务或池关闭 → 全部 inline。
+- `createTile` 把 5 层包成 lambda（`[&]` 捕获，runAll 阻塞期间栈局部存活），各层**自己的 emptyPath
+  标志**（原 elevation 与 ortho 共用 `emptyPath0`，并行下是 data race，已拆成 emptyPathE/0/1/U/O）。
+
+**并发安全（配套，必读）**：并行后多线程同抢 reader-writer 缓存。原先两处 **无锁 mutable map** 是
+**既存潜在 race**（20 DR 线程早就并发命中，只因缓存几块内就 warm 满、之后全是读而没崩）：
+- `TileManager::getReaderWriter`（`TileCallback.cpp`）：加 `OpenThreads::Mutex _cachedRWMutex`。
+- `ReaderWriterWeb::getReaderWriter`（`osgdb_web`）：加 `mutable OpenThreads::Mutex`（该函数 const）。
+- `createLayerImage/Handler` 读 `_layerPaths` 从 `operator[]`（非 const、可能 insert）改 `find()`（const 安全）。
+- 传入的 `Options` **只读**（web reader 内部 `clone(SHALLOW_COPY)` 后用），多层共享 opt 安全。
+
+**验证（headless）**：
+- pool=8 全球 home 视角：地球/大气/面板全对、不镜像、无崩溃 ✓
+- pool=8 暖缓存 `--goto 37.77 -122.42 6`（旧金山街道级）：面板正常可读、不镜像 ✓
+- pool=0 回退：渲染正常、可读 ✓
+- 冷缓存 `--goto` + pool=8 截图偶现**面板文字水平镜像** → 是 **ScreenCaptureHandler 在大量瓦片并发
+  合成的帧上回读的伪影**（面板仍左停靠、只是字形镜像；并行*数据加载*无路径触及 HUD 字形渲染；交互
+  渲染不做帧回读）。暖缓存下消失 → 确证非渲染回归。**交互验证时留意有无真镜像（预期不会）。**
+- 旋钮：`EARTH_TILE_POOL=0` 关闭并行（逐层串行）、`=N` 设池大小。若 google/aws 限流（下钻变慢/失败刷屏）
+  就调小。

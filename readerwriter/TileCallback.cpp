@@ -6,6 +6,7 @@
 #include <osgDB/FileNameUtils>
 #include <osgDB/FileUtils>
 #include <osgUtil/SmoothingVisitor>
+#include <OpenThreads/ScopedLock>
 
 #include <modeling/Math.h>
 #include <pipeline/Utilities.h>
@@ -108,7 +109,10 @@ osg::Image* TileCallback::decodeTerrarium(const osg::Image* src)
 osg::Texture* TileCallback::createLayerImage(LayerType id, bool& emptyPath, const osgDB::Options* opt,
                                              osg::NodeVisitor::ImageRequestHandler* irh)
 {
-    std::string inputAddr = _layerPaths[(int)id].first;
+    // Use find() (const, concurrency-safe) rather than operator[] (may rehash/insert):
+    // createTile now calls this for several layers at once on the parallel load pool.
+    std::map<int, DataPathPair>::const_iterator pit = _layerPaths.find((int)id);
+    std::string inputAddr = (pit != _layerPaths.end()) ? pit->second.first : std::string();
     emptyPath = (inputAddr.empty()); if (emptyPath) return NULL;
 
     std::string url = _createPathFunc ? _createPathFunc((int)id, inputAddr, _x, _y, _z)
@@ -141,7 +145,8 @@ osg::Texture* TileCallback::createLayerImage(LayerType id, bool& emptyPath, cons
 
 TileGeometryHandler* TileCallback::createLayerHandler(LayerType id, bool& emptyPath, const osgDB::Options* opt)
 {
-    std::string inputAddr = _layerPaths[(int)id].first;
+    std::map<int, DataPathPair>::const_iterator pit = _layerPaths.find((int)id);
+    std::string inputAddr = (pit != _layerPaths.end()) ? pit->second.first : std::string();
     emptyPath = (inputAddr.empty()); if (emptyPath) return NULL;
 
     std::string url = _createPathFunc ? _createPathFunc((int)id, inputAddr, _x, _y, _z)
@@ -697,6 +702,10 @@ bool TileManager::isHandlerExtension(const std::string& ext, std::string& sugges
 
 osgDB::ReaderWriter* TileManager::getReaderWriter(const std::string& protocol, const std::string& url)
 {
+    // Called concurrently from every pager DR thread and (now) the parallel layer-load
+    // pool. The cache is mutated on a miss, so guard it — otherwise two threads inserting
+    // at once corrupt the map. Contended only during the first tiles; pure reads after.
+    OpenThreads::ScopedLock<OpenThreads::Mutex> lock(_cachedRWMutex);
     std::map<std::string, osg::observer_ptr<osgDB::ReaderWriter>>::iterator it = _cachedReaderWriters.find(protocol);
     if (it != _cachedReaderWriters.end()) return it->second.get();
     std::string ext = osgDB::getFileExtension(url); it = _cachedReaderWriters.find(ext);

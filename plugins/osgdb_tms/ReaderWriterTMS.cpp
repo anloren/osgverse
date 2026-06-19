@@ -11,6 +11,110 @@
 #include <readerwriter/Utilities.h>
 #include <readerwriter/TileCallback.h>
 
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <queue>
+#include <functional>
+#include <vector>
+#include <atomic>
+#include <cstdlib>
+
+namespace
+{
+    // Persistent worker pool used to load a single tile's independent layers
+    // (elevation/ortho/mask/labels/overlay) concurrently. A tile created at deep zoom
+    // sits on the drill-down critical path (one tile per level, each waiting on its
+    // parent), and its layers are independent network/cache fetches — loading them in
+    // parallel cuts the per-tile wall time roughly to the slowest single layer.
+    //
+    // Why a *persistent* pool and not just std::thread/std::async per layer: loadFileData
+    // keeps a thread_local keep-alive HTTP client per host, so a fresh TLS handshake
+    // (~0.6s, more than half a tile's cost) is paid only once per worker, not per fetch.
+    // Ephemeral threads would re-handshake every time and be slower than the old
+    // sequential path. Long-lived workers accumulate and reuse their connections.
+    //
+    // Size from EARTH_TILE_POOL (default 8). 0 disables the pool entirely: runAll() then
+    // runs every task inline on the calling pager thread — byte-for-byte the old behavior.
+    class LayerLoadPool
+    {
+    public:
+        static LayerLoadPool& instance()
+        {
+            // Intentionally leaked: workers are detached and may run until process exit;
+            // never destroying the pool avoids a use-after-free of the queue at teardown.
+            static LayerLoadPool* p = new LayerLoadPool(poolSize());
+            return *p;
+        }
+
+        static int poolSize()
+        {
+            static int n = []() {
+                const char* e = getenv("EARTH_TILE_POOL");
+                int v = (e && e[0]) ? atoi(e) : 8; return v < 0 ? 0 : v;
+            }();
+            return n;
+        }
+
+        // Run all tasks, blocking until every one finishes. With the pool enabled, all but
+        // one task are dispatched to workers and the last runs inline on the caller (so the
+        // pager thread's own keep-alive connection does useful work instead of idling).
+        void runAll(std::vector<std::function<void()> >& tasks)
+        {
+            size_t n = tasks.size();
+            if (n == 0) return;
+            if (_workers == 0 || n == 1) { for (size_t i = 0; i < n; ++i) tasks[i](); return; }
+
+            std::shared_ptr<Latch> latch(new Latch((int)(n - 1)));
+            {
+                std::lock_guard<std::mutex> lk(_qm);
+                for (size_t i = 1; i < n; ++i)
+                {
+                    std::function<void()> fn = tasks[i];
+                    _q.push([fn, latch]() { fn(); latch->countDown(); });
+                }
+            }
+            _cv.notify_all();
+            tasks[0]();      // run one layer inline on this pager thread
+            latch->wait();   // then wait for the dispatched layers
+        }
+
+    private:
+        struct Latch
+        {
+            std::mutex m; std::condition_variable cv; int count;
+            Latch(int c) : count(c) {}
+            void countDown() { std::unique_lock<std::mutex> lk(m); if (--count <= 0) cv.notify_all(); }
+            void wait() { std::unique_lock<std::mutex> lk(m); cv.wait(lk, [this]() { return count <= 0; }); }
+        };
+
+        explicit LayerLoadPool(int workers) : _workers(workers)
+        {
+            for (int i = 0; i < _workers; ++i)
+                std::thread([this]() { workerLoop(); }).detach();
+        }
+
+        void workerLoop()
+        {
+            for (;;)
+            {
+                std::function<void()> job;
+                {
+                    std::unique_lock<std::mutex> lk(_qm);
+                    _cv.wait(lk, [this]() { return !_q.empty(); });
+                    job = std::move(_q.front()); _q.pop();
+                }
+                job();
+            }
+        }
+
+        int _workers;
+        std::mutex _qm;
+        std::condition_variable _cv;
+        std::queue<std::function<void()> > _q;
+    };
+}
+
 // WebMercatorTiles: (0-0-0) Lv1 = 00,01,10,11, ...; (0-0-x) Lv0 = 00,01,10,11, ...
 // WGS84Tiles: (0-0-0) Lv1 = 00,10, Lv2 = 00,01,10,11,20,21,30,31, ...; (0-0-x) Lv0 = 00,10, ...
 
@@ -214,22 +318,30 @@ protected:
 
         osg::Matrix localMatrix; osg::ref_ptr<osg::Texture> elevImage;
         osg::ref_ptr<osgVerse::TileGeometryHandler> elevHandler;
-        bool emptyPath0 = false, emptyPath1 = false, allLayersDone = true;
+        osg::ref_ptr<osg::Texture> orthImage, maskImage, userImage, overlayImage;
+        // Each layer gets its own emptyPath flag (the layers now load concurrently, so the
+        // old shared emptyPath0 between elevation and orthophoto would be a data race).
+        bool emptyPathE = false, emptyPath0 = false, emptyPath1 = false, emptyPathU = false, emptyPathO = false;
+        bool allLayersDone = true;
         osgVerse::TileCallback::LayerState failState = osgVerse::TileCallback::DEFERRED;
-        if (elevH)
-            elevHandler = tileCB->createLayerHandler(osgVerse::TileCallback::ELEVATION, emptyPath0, opt);
-        else
-            elevImage = tileCB->createLayerImage(osgVerse::TileCallback::ELEVATION, emptyPath0, opt);
-        if (!elevHandler && !elevImage && !emptyPath0)
-            { tileCB->setLayerPathState(osgVerse::TileCallback::ELEVATION, failState); allLayersDone = false; }
 
-        osg::ref_ptr<osg::Texture> orthImage = tileCB->createLayerImage(osgVerse::TileCallback::ORTHOPHOTO, emptyPath0, opt);
-        osg::ref_ptr<osg::Texture> maskImage = tileCB->createLayerImage(osgVerse::TileCallback::OCEAN_MASK, emptyPath1, opt);
-        bool emptyPathU = false;
-        osg::ref_ptr<osg::Texture> userImage = tileCB->createLayerImage(osgVerse::TileCallback::USER, emptyPathU, opt);
-        bool emptyPathO = false;
-        osg::ref_ptr<osg::Texture> overlayImage =
-            tileCB->createLayerImage(osgVerse::TileCallback::OVERLAY, emptyPathO, opt);
+        // Load all layers concurrently (or inline when EARTH_TILE_POOL=0). The tasks share no
+        // mutable state — each writes a distinct texture and a distinct emptyPath flag, and
+        // createLayerImage/Handler only read tileCB. runAll() blocks until all finish, so the
+        // captured stack locals stay alive throughout.
+        std::vector<std::function<void()> > layerTasks;
+        if (elevH)
+            layerTasks.push_back([&]() { elevHandler = tileCB->createLayerHandler(osgVerse::TileCallback::ELEVATION, emptyPathE, opt); });
+        else
+            layerTasks.push_back([&]() { elevImage = tileCB->createLayerImage(osgVerse::TileCallback::ELEVATION, emptyPathE, opt); });
+        layerTasks.push_back([&]() { orthImage = tileCB->createLayerImage(osgVerse::TileCallback::ORTHOPHOTO, emptyPath0, opt); });
+        layerTasks.push_back([&]() { maskImage = tileCB->createLayerImage(osgVerse::TileCallback::OCEAN_MASK, emptyPath1, opt); });
+        layerTasks.push_back([&]() { userImage = tileCB->createLayerImage(osgVerse::TileCallback::USER, emptyPathU, opt); });
+        layerTasks.push_back([&]() { overlayImage = tileCB->createLayerImage(osgVerse::TileCallback::OVERLAY, emptyPathO, opt); });
+        LayerLoadPool::instance().runAll(layerTasks);
+
+        if (!elevHandler && !elevImage && !emptyPathE)
+            { tileCB->setLayerPathState(osgVerse::TileCallback::ELEVATION, failState); allLayersDone = false; }
         if (!orthImage && !emptyPath0)
             { tileCB->setLayerPathState(osgVerse::TileCallback::ORTHOPHOTO, failState); allLayersDone = false; }
         if (!maskImage && !emptyPath1)
