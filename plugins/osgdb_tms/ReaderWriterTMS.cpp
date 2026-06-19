@@ -351,7 +351,13 @@ protected:
             { tileCB->setLayerPathState(osgVerse::TileCallback::ELEVATION, failState); allLayersDone = false; }
         if (!orthImage && !emptyPath0)
             { tileCB->setLayerPathState(osgVerse::TileCallback::ORTHOPHOTO, failState); allLayersDone = false; }
-        if (!maskImage && !emptyPath1)
+        // Like elevation, the land/ocean mask must inherit from the parent when this tile
+        // has none of its own (Mask_lv3 is z<=3 only, so createCustomPath returns "" past
+        // z3). Otherwise the mask reads 0 = "ocean" everywhere, and with the ocean pass on,
+        // z>3 tiles get the ocean tint over land too — dark blue rectangles at the z3/z4 LOD
+        // boundary. The mask also drives terrain relief shading, so inheriting keeps that
+        // continuous across the boundary. maskPath empty = no mask configured → skip.
+        if (!maskImage && !maskPath.empty())
             { tileCB->setLayerPathState(osgVerse::TileCallback::OCEAN_MASK, failState); allLayersDone = false; }
         if (!userImage && !emptyPathU)
             { tileCB->setLayerPathState(osgVerse::TileCallback::USER, failState); allLayersDone = false; }

@@ -572,11 +572,13 @@ bool TileCallback::updateLayerData(osg::NodeVisitor* nv, osg::Node* node, LayerT
         tex = createLayerImage(id, emptyPath, opt); texUnit = 2; break;
     }
 
-    // ELEVATION always inherits the parent's height when it has none of its own (z>15
-    // cutoff, or transient failure) — a 3D tile can't be left flat at sea level. Other
-    // layers (overlay/mask) legitimately disappear at deep zoom, so they keep the
-    // !emptyPath guard (an empty path means "this layer has no data here", not "reuse").
-    if (!tex && node->getNumParents() > 0 && (id == ELEVATION || !emptyPath))
+    // ELEVATION and OCEAN_MASK are base layers every tile needs: elevation for height,
+    // the mask for land/ocean classification + relief shading. When this tile has none of
+    // its own (z>15 has no terrarium, z>3 has no Mask_lv3, or a transient failure) it must
+    // inherit the parent's, even with emptyPath — otherwise elevation collapses flat and
+    // the mask reads "ocean" over everything. OVERLAY/USER legitimately disappear at deep
+    // zoom, so they keep the !emptyPath guard.
+    if (!tex && node->getNumParents() > 0 && (id == ELEVATION || id == OCEAN_MASK || !emptyPath))
         tex = findAndUseParentData(id, node->getParent(0));
     if (tex.valid())
     {
