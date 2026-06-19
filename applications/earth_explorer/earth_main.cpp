@@ -353,6 +353,14 @@ int main(int argc, char** argv)
     earthManipulator->setIntersectionMask(EARTH_INTERSECTION_MASK);
     earthManipulator->setWorldNode(earth.get());
     earthManipulator->setThrowAllowed(manipulatorCanThrow);
+    // Clamp how close the camera may get to the surface. Below ~the near-plane distance
+    // (far × nearFarRatio ≈ 130 m at planet scale) the close geometry falls in front of the
+    // near plane and renders as streaked garbage — a planet-scale depth-precision limit we
+    // can't fix without a logarithmic-depth pipeline. Keep the camera just above it. Default
+    // 150 m (street level, just clear of the near plane); EARTH_MIN_DIST overrides for tuning.
+    double minDist = 150.0; const char* mdEnv = getenv("EARTH_MIN_DIST");
+    if (mdEnv && mdEnv[0]) minDist = atof(mdEnv);
+    earthManipulator->setMinDistance(minDist);
 
     //osg::Vec3d pos = osgVerse::Coordinate::convertLLAtoECEF(
     //    osg::Vec3d(osg::inDegrees(0.0), osg::inDegrees(120.0), 10000.0));
