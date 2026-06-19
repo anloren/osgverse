@@ -249,6 +249,12 @@ namespace osgVerse
             if (_animationDistance < _minDistance) _animationDistance = _minDistance;
         }
 
+        /** Keep the camera from sinking below the actual terrain surface (the ellipsoid
+            clamp above doesn't know terrain height, so over any raised terrain the camera
+            can end up inside it and render as streaked spikes). Raycasts straight down only
+            when close, so far-out views pay nothing. Called every frame. */
+        void clampToTerrain();
+
         osg::ref_ptr<osg::Node> _node;
         osg::ref_ptr<osg::Node> _world;
         osg::ref_ptr<const osgGA::GUIEventAdapter> _ga_t0;  // Current event
@@ -272,6 +278,7 @@ namespace osgVerse
         double _latestLatitude, _latestLongitude, _latestAltitude;
         double _distance;  // Distance between eye and view point
         double _minDistance;  // Minimum allowed distance to prevent camera going below surface
+        double _terrainLift;  // distance added by clampToTerrain last frame; undone+recomputed each frame
         float _tilt;  // Vertical angle to the horizon
 
         unsigned int _intersectionMask;  // Mask for intersection with the earth
