@@ -39,9 +39,12 @@ namespace osgVerse
                                        double& tileWidth, double& tileHeight) const;
         virtual double mapAltitude(const osg::Vec4& color, double minH = 0.0, double maxH = 20000.0) const;
 
+        // elevScaleBias 把瓦片 UV[0,1] 映射到高程纹理的子区(xy=bias, zw=scale)。用自身高程的瓦片为
+        // 单位变换;深瓦片(z>15)采 z15 祖先纹理时,它选中本瓦片所在象限,从而一步烘焙出正确高度。
         virtual osg::Geometry* createTileGeometry(osg::Matrix& outMatrix, osg::Texture* elevation,
                                                   const osg::Vec3d& tileMin, const osg::Vec3d& tileMax,
-                                                  double width, double height) const;
+                                                  double width, double height,
+                                                  const osg::Vec4& elevScaleBias = osg::Vec4(0.0f, 0.0f, 1.0f, 1.0f)) const;
         virtual osg::Geometry* createTileGeometry(osg::Matrix& outMatrix, TileGeometryHandler* handler,
                                                   const osg::Vec3d& tileMin, const osg::Vec3d& tileMax,
                                                   double width, double height) const;

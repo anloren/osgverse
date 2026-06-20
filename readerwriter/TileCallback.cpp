@@ -207,7 +207,8 @@ osg::Geometry* TileCallback::createTileGeometry(osg::Matrix& outMatrix, TileGeom
 
 osg::Geometry* TileCallback::createTileGeometry(osg::Matrix& outMatrix, osg::Texture* elevationTex,
                                                 const osg::Vec3d& tileMin, const osg::Vec3d& tileMax,
-                                                double width, double height) const
+                                                double width, double height,
+                                                const osg::Vec4& elevScaleBias) const
 {
     osg::Image* elevation = (elevationTex ? elevationTex->getImage(0) : NULL);
     bool useRealElevation = elevation ? (elevation->getDataType() == GL_FLOAT) : false;
@@ -241,7 +242,9 @@ osg::Geometry* TileCallback::createTileGeometry(osg::Matrix& outMatrix, osg::Tex
                 osg::Vec2 uv((double)x * invW / width, (double)y * invH / height);
                 if (elevation)
                 {
-                    osg::Vec4 elevColor = elevation->getColor(uv);
+                    osg::Vec2 euv(uv[0] * elevScaleBias[2] + elevScaleBias[0],
+                                  uv[1] * elevScaleBias[3] + elevScaleBias[1]);  // 深瓦片采 z15 祖先子区;ortho 仍用 uv
+                    osg::Vec4 elevColor = elevation->getColor(euv);
                     if (elevColor[0] > 10e6 || elevColor[0] < -10e6) { altitude = lastAlt; }
                     else altitude = (useRealElevation ? elevColor[0] : mapAltitude(elevColor)) * _elevationScale;
                 }
@@ -290,7 +293,9 @@ osg::Geometry* TileCallback::createTileGeometry(osg::Matrix& outMatrix, osg::Tex
                 osg::Vec2 uv((double)x * invW / width, (double)y * invH / height);
                 if (elevation)
                 {
-                    osg::Vec4 elevColor = elevation->getColor(uv);
+                    osg::Vec2 euv(uv[0] * elevScaleBias[2] + elevScaleBias[0],
+                                  uv[1] * elevScaleBias[3] + elevScaleBias[1]);  // 深瓦片采 z15 祖先子区;ortho 仍用 uv
+                    osg::Vec4 elevColor = elevation->getColor(euv);
                     if (elevColor[0] > 10e6 || elevColor[0] < -10e6) { altitude = lastAlt; }
                     else altitude = (useRealElevation ? elevColor[0] : mapAltitude(elevColor)) * elevationScale2D;
                 }

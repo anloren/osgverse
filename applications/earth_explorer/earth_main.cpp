@@ -199,9 +199,15 @@ static std::string createCustomPath(int type, const std::string& prefix, int x, 
     }
     else if (type == osgVerse::TileCallback::ELEVATION)
     {
-        // AWS Terrarium 高程最高约 z15；z>15 请求必 404，会在主线程 DEFERRED 重试阻塞（近地卡顿元凶之一）
-        // 且刷屏 404。截断后深层瓦片自动复用父级 z15 高程（findAndUseParentData），地形不丢。
-        if (z > 15) return "";
+        // AWS Terrarium 高程最高约 z15。深瓦片(z>15)取 z15 **祖先瓦片**,createTile 用 elevScaleBias
+        // 采子区一步烘焙正确高度 → 与 z15 父级连续、消除 LOD 边界落差/看穿孔洞;配套 EarthManipulator
+        // 的相机地形地板(Step A)防穿模。一步烘焙按瓦片坐标确定性算出,无运行时继承的时序竞态。
+        if (z > 15)
+        {
+            int dz = z - 15, ax = x >> dz, ay = y >> dz;
+            int ayXYZ = (1 << 15) - 1 - ay;
+            return osgVerse::TileCallback::createPath(prefix, ax, ayXYZ, 15);
+        }
         return osgVerse::TileCallback::createPath(prefix, x, yXYZ, z);
     }
     else if (type == osgVerse::TileCallback::USER)

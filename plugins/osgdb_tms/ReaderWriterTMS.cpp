@@ -243,9 +243,17 @@ protected:
         // FIXME: this makes no future tiles... consider a better way?
         if (!orthImage) { OSG_NOTICE << "[ReaderWriterTMS] No imagery for tile " << name << "\n"; return NULL; }
 
+        // z>15 的高程纹理是 z15 祖先瓦片(见 createCustomPath);算出本瓦片在祖先里的子区,在建几何时
+        // 一步烘焙正确高度——按瓦片坐标确定性算出,无父级 uniform 依赖、无时序竞态。
+        osg::Vec4 elevScaleBias(0.0f, 0.0f, 1.0f, 1.0f);
+        if (z > 15)
+        {
+            int dz = z - 15, subN = 1 << dz; float inv = 1.0f / (float)subN;
+            elevScaleBias.set((float)(x & (subN - 1)) * inv, (float)(y & (subN - 1)) * inv, inv, inv);
+        }
         osg::ref_ptr<osg::Geometry> geom = elevHandler.valid() ?
             tileCB->createTileGeometry(localMatrix, elevHandler.get(), tileMin, tileMax, tileWidth, tileHeight) :
-            tileCB->createTileGeometry(localMatrix, elevImage.get(), tileMin, tileMax, tileWidth, tileHeight);
+            tileCB->createTileGeometry(localMatrix, elevImage.get(), tileMin, tileMax, tileWidth, tileHeight, elevScaleBias);
         geom->setUseDisplayList(false); geom->setUseVertexBufferObjects(true); geom->setName(name + "_Geom");
         if (orthImage.valid())
         {
