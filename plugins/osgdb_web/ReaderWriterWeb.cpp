@@ -5,8 +5,6 @@
 #include <osgDB/FileNameUtils>
 #include <osgDB/FileUtils>
 #include <osgDB/FileCache>
-#include <OpenThreads/Mutex>
-#include <OpenThreads/ScopedLock>
 #include <algorithm>
 
 #include "3rdparty/libhv/all/client/requests.h"
@@ -377,9 +375,6 @@ protected:
     osgDB::ReaderWriter* getReaderWriter(const std::string& extOrMime, bool isExt) const
     {
         if (extOrMime.empty()) return NULL;
-        // Guard the cache: readImage runs on every pager DR thread and (now) the parallel
-        // tile-layer load pool, all mutating this map on a miss. Contended only at warm-up.
-        OpenThreads::ScopedLock<OpenThreads::Mutex> lock(_cachedRWMutex);
         std::map<std::string, std::string>::const_iterator m = isExt ? _mimeTypes.end() : _mimeTypes.find(extOrMime);
         std::map<std::string, osg::observer_ptr<osgDB::ReaderWriter>>::const_iterator
             it = _cachedReaderWriters.find(extOrMime);
@@ -392,7 +387,6 @@ protected:
     }
 
     std::map<std::string, osg::observer_ptr<osgDB::ReaderWriter>> _cachedReaderWriters;
-    mutable OpenThreads::Mutex _cachedRWMutex;  // guards _cachedReaderWriters (getReaderWriter is const)
     std::map<std::string, std::string> _mimeTypes;
 };
 
