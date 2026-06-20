@@ -21,11 +21,18 @@
 ② 在**用户报告的确切条件**下复现(高度段/开关/太阳)，别乱缩放截图；③ 改渲染前先 curl 真实瓦片确认不是数据问题；
 ④ 不要碰默认太阳方向/OceanOpaque 去"修"颜色。详见记忆 [[earth-orange-ocean-rootcause]]、[[earth-debug-verify-at-exact-condition]]。
 
-**当前仍未解决（原始 bug，回退后又回来了，是这次会话最初要修的）**：昆明/滇池岸**深瓦片错位**——
-z16 平瓦片(0m) vs z15 高程(~1890m)在 LOD 边界形成裂缝/看穿。修它时务必避开上面 4 类回归。
-回退说明见提交 `revert(earth): roll back this session's earth changes`；我的会话工作分支已按用户要求删除。
+**✅ 原始 bug 已修复并推送(2026-06-20 后续会话)**：昆明/滇池岸"**看穿孔洞**"(z>15 平瓦片 0m vs z15 高程 ~1890m 的 LOD 边界看穿到地球背面)**已修，用户交互确认大孔洞消失**。详见记忆 [[earth-seethrough-hole-fix]]（含根因、诊断法、窗口真相）。本会话提交(均已 push `origin/master`)：
+- `b34ce064` test：`EARTH_TILT` 测试钩子(headless 斜视复现用)。
+- `b5976ac7` fix：**相机地形地板**(防穿模，用户确认"始终为正")—— `EarthManipulator` 每帧按**眼睛自身经纬度**竖直射线测地形、把眼睛抬到地形+150m；倾斜可用、far/全球视图跳过。
+- `48e38efd` fix：**深瓦片高程一步烘焙**(消看穿孔洞)—— `createCustomPath` 对 z>15 返回 **z15 祖先瓦片** URL；`createTile` 算 `elevScaleBias=((x&(subN-1))/subN,(y&(subN-1))/subN,1/subN,1/subN)`；`createTileGeometry` 用 `euv=uv*scale+bias` 采祖先子区一步烘焙真实高度(影像仍各自全分辨率)。**确定性、无运行时继承竞态**(重做被回退的 `fabf2747`/`e4c177e2`，这次单独做+验证)。配相机地板防穿模；不碰太阳/海洋/着色器→无 4 类回归。
+- **全球性已验**(纯瓦片坐标、无地点假设)：珠峰深瓦片 ~8662m、昆明 ~1900-4000m、上海读到东海海床 bathymetry 负值(Terrarium 数据本身、非回归)。
+- `dist/EarthExplorer.app` 已用最新二进制**重打包**(全屏，`NSHighResolutionCapable=false`)。
 
-**2026-06-20（后续校正会话）**：用户选择"先校正状态、暂不改渲染"。本会话**未动任何渲染/地形/相机代码**，只做了：① 补齐漏回退的 `ReaderWriterWeb.cpp`（现整棵代码树 = `0f902837`）；② 把本 HANDOFF 的"Git 现状"与 backlog 从回退前的陈旧描述校正为真实状态（详见下文）。昆明耦合修复**仍未开工**，等用户有空交互验证时再按"一次一步"做。
+**残留(用户接受、待办、卫星图可接受)**：陡坡瓦片高程范围大→包围球被撑大→**过度细分到 z>15**→偶有极小缝/小范围 LOD 跳变。根治是独立 perf 项(修包围球/`PIXEL_SIZE_ON_SCREEN` 估算)。沿海城市真实街道级观感待人工扫一眼(headless 够不到 z16)。
+
+**窗口"左下 1/4"别再乱修**：是 `.app` 的 Info.plist `NSHighResolutionCapable=false` 修的、**裸二进制 1/4 是正常的**、`getScreenResolution` 返回点数。详见 [[earth-seethrough-hole-fix]] + `tasks/lessons.md:126`。
+
+**更早的校正会话**(同日早些)：补齐漏回退的 `ReaderWriterWeb.cpp`(代码树曾 = `0f902837`)+ 校正本 HANDOFF 陈旧描述。
 ---
 
 ## 这是什么
