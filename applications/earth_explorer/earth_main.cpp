@@ -376,6 +376,14 @@ int main(int argc, char** argv)
     if (gotoLat < 1.0e8)  // --goto 指定了起始视点
         earthManipulator->setByEye(osg::inDegrees(gotoLat), osg::inDegrees(gotoLon), gotoAltKm * 1000.0);
 
+    // Headless verification aid only (no effect on the actual fix/rendering):
+    // EARTH_TILT=<radians> applies a startup camera pitch after --goto, so oblique views
+    // — where LOD-boundary cracks and terrain penetration appear — can be reproduced and
+    // captured without a live mouse drag. makeDeltaTilt subtracts its arg from _tilt.
+    const char* tiltEnv = getenv("EARTH_TILT");
+    if (tiltEnv && tiltEnv[0] && gotoLat < 1.0e8)
+        earthManipulator->makeDeltaTilt(-(float)atof(tiltEnv));
+
     // Headless auto-capture: render a fixed number of frames (letting the database
     // pager stream tiles) then grab the GL framebuffer to a PNG. Used to verify the
     // earth renders without relying on OS screen-capture permissions.
