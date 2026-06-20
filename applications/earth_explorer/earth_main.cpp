@@ -426,6 +426,20 @@ int main(int argc, char** argv)
         // time to stream deep online tiles before the capture frame.
         const char* fsleep = getenv("EARTH_FRAME_SLEEP_MS");
         int frameSleepMs = fsleep ? atoi(fsleep) : 0;
+        // Optional: pin the sun to an exact azimuth/elevation (UI 滑块 convention) to
+        // reproduce a reported lighting condition headless. EARTH_SUN_AZEL=az,el (度)。
+        const char* sunAzEl = getenv("EARTH_SUN_AZEL");
+        bool useSunAzEl = false; osg::Vec3 sunAzElDir(-1.0f, 0.0f, 0.0f);
+        if (sunAzEl && *sunAzEl)
+        {
+            float az = 0.0f, el = 0.0f;
+            if (sscanf(sunAzEl, "%f,%f", &az, &el) >= 1)
+            {
+                float ar = osg::DegreesToRadians(az), er = osg::DegreesToRadians(el);
+                sunAzElDir.set(cosf(er) * cosf(ar), cosf(er) * sinf(ar), sinf(er));
+                useSunAzEl = true;
+            }
+        }
         if (!viewer.isRealized()) viewer.realize();
         for (int i = 0; i < total && !viewer.done(); ++i)
         {
@@ -436,6 +450,8 @@ int main(int argc, char** argv)
                 osg::Vec3 dir(eye); dir.normalize(); dir *= sunSign;
                 earthRenderingUtils.commonUniforms["WorldSunDir"]->set(dir);
             }
+            if (useSunAzEl)
+                earthRenderingUtils.commonUniforms["WorldSunDir"]->set(sunAzElDir);
             viewer.frame();
             if (frameSleepMs > 0) OpenThreads::Thread::microSleep((unsigned int)frameSleepMs * 1000);
             if (i == total - 5) capturer->captureNextFrame(viewer);
