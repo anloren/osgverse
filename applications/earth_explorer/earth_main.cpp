@@ -219,15 +219,17 @@ static std::string createCustomPath(int type, const std::string& prefix, int x, 
     else if (type == osgVerse::TileCallback::OVERLAY)
     {
         if (z > 9) return "";  // GIBS GoogleMapsCompatible_Level9 max zoom is 9; no data above
-        // GIBS 每日真彩马赛克约 2 天后才全球拼全；用 "default"(今天) 会大片 404 → 每帧重试网络风暴。
-        // 取「今天-2 天」(UTC) 的完整日期，只算一次（长时间运行不刷新；跨 UTC 午夜需重启刷新）。
+        // 用 VIIRS_SNPP 真彩而非 MODIS_Terra：MODIS 单星刈幅 2330km < 赤道轨道间距，每日真彩在赤道
+        // 留一排黑色刈幅空隙（贴到球上=黑色尖楔）；VIIRS 刈幅 3060km 在赤道搭接 → 每日真彩无缝。
+        // 仍取「今天-2 天」(UTC) 的完整日期，只算一次（长时间运行不刷新；跨 UTC 午夜需重启刷新）。
+        // 南极极夜瓦片 VIIRS 返回 404 → 加载失败回退默认透明贴图（露底图）而非黑斑。
         static const std::string gibsDate = []() {
             time_t t = time(NULL) - 2 * 86400; struct tm g; gmtime_r(&t, &g);
             char buf[16]; strftime(buf, sizeof(buf), "%Y-%m-%d", &g); return std::string(buf);
         }();
         std::string gibs =
             "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/"
-            "MODIS_Terra_CorrectedReflectance_TrueColor/default/" + gibsDate +
+            "VIIRS_SNPP_CorrectedReflectance_TrueColor/default/" + gibsDate +
             "/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg";
         return osgVerse::TileCallback::createPath(gibs, x, yXYZ, z);
     }
@@ -366,7 +368,18 @@ int main(int argc, char** argv)
     if (OverlayLayer* lbl = layerMgr.find("labels"))
         layerMgr.setEnabled("labels", lbl->enabled);
     if (OverlayLayer* cl = layerMgr.find("clouds"))
+    {
+        // 默认关 → Overlay2Opacity 保持 0。EARTH_CLOUDS=<不透明度> 可在 headless/脚本里强制
+        // 开启 GIBS 影像/云图层(取值即不透明度，0=关)，供无界面验证用（同 EARTH_TILT 测试钩子）。
+        const char* cloudsEnv = getenv("EARTH_CLOUDS");
+        if (cloudsEnv && *cloudsEnv)
+        {
+            float op = (float)atof(cloudsEnv);
+            cl->enabled = (op > 0.0f);
+            cl->opacity = (op < 0.0f) ? 0.0f : (op > 1.0f ? 1.0f : op);
+        }
         layerMgr.setEnabled("clouds", cl->enabled);  // default off → Overlay2Opacity stays 0
+    }
 
     // ImGui 控制面板 — 挂到最终 HUD 相机（cameras[3]），确保在地球图像之上绘制
     osg::ref_ptr<osgVerse::ImGuiManager> imgui = new osgVerse::ImGuiManager;
