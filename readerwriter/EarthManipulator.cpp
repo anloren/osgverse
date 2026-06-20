@@ -9,7 +9,8 @@ static double g_distanceToCenter = 0.0;
 
 EarthManipulator::EarthManipulator()
 :   _viewer(NULL), _latestLatitude(0.0), _latestLongitude(0.0), _latestAltitude(0.0),
-    _tilt(0.0f), _throwAllowed(true), _thrown(false), _locked(false), _minDistance(50.0)
+    _minDistance(50.0), _terrainMargin(150.0), _terrainLift(0.0),
+    _tilt(0.0f), _throwAllowed(true), _thrown(false), _locked(false)
 {
     _tiltCenter.set(0.0, 0.0, -DBL_MAX);
     _rotateAxis.set(0.0, 0.0, -DBL_MAX);
@@ -50,7 +51,7 @@ void EarthManipulator::setByInverseMatrix(const osg::Matrixd& mat)
     setByEye(eye, 0.0f);
 }
 
-osg::Matrixd EarthManipulator::getManipulatorMatrix(bool withTilt) const
+osg::Matrixd EarthManipulator::getManipulatorMatrix(bool withTilt, bool withTerrainLift) const
 {
     osg::Matrixd matrix;
     if (_animationRunning)
@@ -72,12 +73,22 @@ osg::Matrixd EarthManipulator::getManipulatorMatrix(bool withTilt) const
         matrix.postMultRotate(_worldRotation);
         matrix.postMultTranslate(_worldCenter);
     }
+
+    // Global terrain floor: slide the whole camera up along the local vertical so the eye
+    // never sinks below the real terrain. Post-translating in world space shifts eye and
+    // look-at together -> the view rises but the look direction is unchanged.
+    if (withTerrainLift && _terrainLift > 0.0)
+    {
+        osg::Vec3d eye = osg::Vec3d(0.0, 0.0, 0.0) * matrix;
+        osg::Vec3d up = eye - _worldCenter; double len = up.length();
+        if (len > 0.0) { up /= len; matrix.postMultTranslate(up * _terrainLift); }
+    }
     return matrix;
 }
 
-osg::Matrixd EarthManipulator::getViewMatrix(bool withTilt) const
+osg::Matrixd EarthManipulator::getViewMatrix(bool withTilt, bool withTerrainLift) const
 {
-    return osg::Matrixd::inverse(getManipulatorMatrix(withTilt));
+    return osg::Matrixd::inverse(getManipulatorMatrix(withTilt, withTerrainLift));
     /*osg::Matrixd matrix;
     if ( _animationRunning )
     {
@@ -212,6 +223,7 @@ bool EarthManipulator::handle(const osgGA::GUIEventAdapter& ea, osgGA::GUIAction
         {
             if (calcMovement(true)) us.requestRedraw();
         }
+        updateTerrainFloor();  // global: keep the eye above real terrain every frame
         g_distanceToCenter = getDistance();
         return false;
 
@@ -657,6 +669,59 @@ bool EarthManipulator::calcTiltCenter(bool useCameraMatrix)
             _tiltCenter.set(0.0, 0.0, -DBL_MAX);
     }
     return false;
+}
+
+bool EarthManipulator::terrainAltitudeAt(double latitude, double longitude, double& outAltitude) const
+{
+    if (!_viewer || !_world.valid() || !_ellipsoid.valid()) return false;
+
+    // Vertical probe segment through (lat, lon): from well above the highest mountains down
+    // to below the deepest trench. Intersecting this against the rendered terrain returns the
+    // ground altitude at that horizontal position regardless of where the eye currently is
+    // (above or below the surface). The first hit (closest to the high start) is the top face.
+    osg::Vec3d hi, lo;
+    _ellipsoid->convertLatLongHeightToXYZ(latitude, longitude, 25000.0, hi.x(), hi.y(), hi.z());
+    _ellipsoid->convertLatLongHeightToXYZ(latitude, longitude, -12000.0, lo.x(), lo.y(), lo.z());
+    hi += _worldCenter; lo += _worldCenter;
+
+    osg::ref_ptr<osgUtil::LineSegmentIntersector> intersector =
+        new osgUtil::LineSegmentIntersector(osgUtil::Intersector::MODEL, hi, lo);
+    osgUtil::IntersectionVisitor iv(intersector.get());
+    iv.setTraversalMask(_intersectionMask);
+    _viewer->getCamera()->accept(iv);
+    if (!intersector->containsIntersections()) return false;
+
+    osg::Vec3d p = intersector->getFirstIntersection().getWorldIntersectPoint() - _worldCenter;
+    double lat2, lon2; _ellipsoid->convertXYZToLatLongHeight(p.x(), p.y(), p.z(), lat2, lon2, outAltitude);
+    return true;
+}
+
+void EarthManipulator::updateTerrainFloor()
+{
+    if (!_viewer || !_world.valid() || !_ellipsoid.valid()) { _terrainLift *= 0.9; return; }
+
+    // Un-lifted eye lat/lon/height -> compute the required lift from the RAW geometry so the
+    // applied lift never feeds back into the next frame's measurement (that caused flicker).
+    osg::Vec3d eye = osg::Vec3d(0.0, 0.0, 0.0) * getManipulatorMatrix(true, false);
+    osg::Vec3d e = eye - _worldCenter; double lat, lon, hEye;
+    _ellipsoid->convertXYZToLatLongHeight(e.x(), e.y(), e.z(), lat, lon, hEye);
+
+    double desiredLift = 0.0;
+    if (hEye < 30000.0)  // only near the ground; far/global views are left untouched
+    {
+        double hTerrain = 0.0;
+        if (terrainAltitudeAt(lat, lon, hTerrain))
+        {
+            double floorAlt = hTerrain + _terrainMargin;
+            if (hEye < floorAlt) desiredLift = floorAlt - hEye;
+        }
+    }
+
+    // Raise instantly (never allow a frame below terrain), ease down slowly (no pop when a
+    // higher-LOD elevation tile streams in and slightly changes the sampled height).
+    if (desiredLift > _terrainLift) _terrainLift = desiredLift;
+    else _terrainLift += (desiredLift - _terrainLift) * 0.08;
+    if (_terrainLift < 0.5) _terrainLift = 0.0;
 }
 
 void EarthManipulator::makePositionFromEye(osg::Quat& new_rotate, double& new_distance,

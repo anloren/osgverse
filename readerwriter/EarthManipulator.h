@@ -97,8 +97,8 @@ namespace osgVerse
                     AnimationCompletedFunc func = NULL);
 
         /** Get the manipulator matrix */
-        osg::Matrixd getManipulatorMatrix(bool withTilt = true) const;
-        osg::Matrixd getViewMatrix(bool withTilt = true) const;
+        osg::Matrixd getManipulatorMatrix(bool withTilt = true, bool withTerrainLift = true) const;
+        osg::Matrixd getViewMatrix(bool withTilt = true, bool withTerrainLift = true) const;
 
         /** Compute the eye position */
         osg::Vec3d computeEye() const
@@ -219,6 +219,15 @@ namespace osgVerse
         bool calcIntersectPoint(float x, float y, osg::Vec3d& point, bool showPoint = true);
         bool calcTiltCenter(bool useCameraMatrix = true);
 
+        // Global terrain floor: every frame near the ground, keep the camera eye above the
+        // REAL terrain (not the ellipsoid datum), at any location. updateTerrainFloor queries
+        // the terrain altitude under the eye's own lat/lon (via a vertical scene-intersection
+        // segment, robust whether the eye is above or below terrain) and, if the eye would
+        // sink below terrain + _terrainMargin, lifts it vertically. The deficit is computed
+        // from the un-lifted eye so there is no feedback/flicker; far views (>30km) are skipped.
+        void updateTerrainFloor();
+        bool terrainAltitudeAt(double latitude, double longitude, double& outAltitude) const;
+
         void makePositionFromEye(osg::Quat& new_rotate, double& new_distance,
                                  const osg::Vec3d& eye, float tilt, float doa);
         void makeBestLookingRotation(osg::Quat& new_rotate,
@@ -272,6 +281,8 @@ namespace osgVerse
         double _latestLatitude, _latestLongitude, _latestAltitude;
         double _distance;  // Distance between eye and view point
         double _minDistance;  // Minimum allowed distance to prevent camera going below surface
+        double _terrainMargin;  // Min eye height above the real terrain (global terrain floor)
+        double _terrainLift;  // Per-frame vertical lift keeping the eye above terrain (smoothed)
         float _tilt;  // Vertical angle to the horizon
 
         unsigned int _intersectionMask;  // Mask for intersection with the earth
