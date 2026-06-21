@@ -23,6 +23,9 @@
 #include <iostream>
 #include <sstream>
 #include <ctime>
+#include <thread>
+#include <atomic>
+#include <vector>
 
 #ifdef OSG_LIBRARY_STATIC
 USE_OSG_PLUGINS()
@@ -185,6 +188,10 @@ protected:
     float _sunAngle;
 };
 
+// AWS Terrarium 高程瓦片 URL 模板;earthURLs 与启动预热两处共用,保证预热与渲染同源、URL 永不漂移。
+static const std::string kTerrariumUrl =
+    "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
+
 static std::string createCustomPath(int type, const std::string& prefix, int x, int y, int z)
 {
     // 内部瓦片是 TMS（OriginBottomLeft=1，原点左下）。在线服务（ArcGIS / Terrarium）
@@ -238,6 +245,53 @@ static std::string createCustomPath(int type, const std::string& prefix, int x, 
     return osgVerse::TileCallback::createPath(prefix, x, y, z);
 }
 
+// 启动磁盘预热:把 z0..maxZ 全球低 LOD 瓦片的 底图+标注+高程 三层预拉进磁盘缓存,用户首次
+// 平移/缩放到新区时粗瓦片立即出图。仅磁盘预热;4 worker 共享原子游标分摊;loadFileData 命中
+// 缓存即秒回 → 天然去重、重跑零浪费。瓦片数 = Σ 4^z = (4^(maxZ+1)-1)/3。
+static void prefetchLowLODGlobe(int maxZ)
+{
+    struct PT { int z, x, y; };
+    std::vector<PT> tiles;
+    for (int z = 0; z <= maxZ; ++z)
+    {
+        int n = 1 << z;
+        for (int y = 0; y < n; ++y)
+            for (int x = 0; x < n; ++x)
+            { PT t; t.z = z; t.x = x; t.y = y; tiles.push_back(t); }
+    }
+
+    std::atomic<size_t> cursor(0);
+    std::atomic<int> warmed(0);
+    const int kWorkers = 4;
+    std::vector<std::thread> pool;
+    for (int w = 0; w < kWorkers; ++w)
+    {
+        pool.push_back(std::thread([&]() {
+            for (;;)
+            {
+                size_t i = cursor.fetch_add(1);
+                if (i >= tiles.size()) break;
+                const PT& t = tiles[i];
+                const int types[3] = { osgVerse::TileCallback::ORTHOPHOTO,
+                                       osgVerse::TileCallback::USER,
+                                       osgVerse::TileCallback::ELEVATION };
+                for (int k = 0; k < 3; ++k)
+                {
+                    std::string prefix =
+                        (types[k] == osgVerse::TileCallback::ELEVATION) ? kTerrariumUrl : std::string();
+                    std::string path = createCustomPath(types[k], prefix, t.x, t.y, t.z);
+                    if (!path.empty())
+                    { std::string mime, enc; osgVerse::loadFileData(path, mime, enc); }
+                }
+                warmed.fetch_add(1);
+            }
+        }));
+    }
+    for (size_t i = 0; i < pool.size(); ++i) pool[i].join();
+    OSG_NOTICE << "[prefetch] Warmed " << warmed.load() << " low-LOD globe tiles (z0-"
+               << maxZ << ", base+labels+elevation)\n";
+}
+
 int main(int argc, char** argv)
 {
     osgViewer::Viewer viewer;
@@ -263,7 +317,7 @@ int main(int argc, char** argv)
         " Orthophoto=google"          // non-empty placeholder; real lyrs=s URL built in createCustomPath
         " User=googleLabels"          // non-empty placeholder; real lyrs=h URL built in createCustomPath
         " Overlay=gibs"               // non-empty placeholder; real GIBS URL built in createCustomPath
-        " Elevation=https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
+        " Elevation=" + kTerrariumUrl +
         " OceanMask=mbtiles://" + mainFolder + "/Earth/Mask_lv3.mbtiles/{z}-{x}-{y}.tif"
         " ElevationEncoding=terrarium MaximumLevel=19 UseWebMercator=1 UseEarth3D=1 OriginBottomLeft=1"
         " TileElevationScale=2.0 TileSkirtRatio=" + skirtRatio;
@@ -272,6 +326,13 @@ int main(int argc, char** argv)
 
     osg::ref_ptr<osg::Node> earth = osgDB::readNodeFile("0-0-0.verse_tms", earthOptions.get());
     if (!earth) { OSG_FATAL << "Main earth scene is missing!\n"; return 1; }
+
+    // 启动磁盘预热(后台 detach 线程,进程退出即回收)。EARTH_PREFETCH=最大 zoom(默认 4,0=关)。
+    {
+        const char* pfEnv = getenv("EARTH_PREFETCH");
+        int prefetchZ = pfEnv ? atoi(pfEnv) : 4;
+        if (prefetchZ > 0) std::thread(prefetchLowLODGlobe, prefetchZ).detach();
+    }
 
     // Configure scene components
     osgVerse::EarthAtmosphereOcean earthRenderingUtils;
