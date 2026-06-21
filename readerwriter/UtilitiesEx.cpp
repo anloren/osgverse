@@ -20,6 +20,8 @@
 #include <cctype>
 #include <fstream>
 #include <functional>
+#include <cstdio>
+#include <thread>
 
 #include "pipeline/Global.h"
 #include "pipeline/Utilities.h"
@@ -603,8 +605,18 @@ namespace osgVerse
             if (!buffer.empty())
             {
                 osgDB::makeDirectory(tileCacheDir());
-                std::ofstream out(cf.c_str(), std::ios::binary);
-                if (out) out.write((const char*)buffer.data(), buffer.size());
+                // 原子发布:先写 per-thread 临时文件，再 rename 到最终路径。预热 worker 与 pager 的
+                // HTTP 线程会并发抢同一 URL；截断式直写会让并发读到半写瓦片(坏图)。rename() 在
+                // POSIX 上原子、可覆盖已存在文件。rename 失败(跨设备/Windows 已存在)则删临时回退。
+                std::ostringstream tn;
+                tn << cf << ".tmp." << (unsigned long long)std::hash<std::thread::id>()(std::this_thread::get_id());
+                std::string tmp = tn.str();
+                {
+                    std::ofstream out(tmp.c_str(), std::ios::binary);
+                    if (out) out.write((const char*)buffer.data(), buffer.size());
+                }
+                if (std::rename(tmp.c_str(), cf.c_str()) != 0) std::remove(tmp.c_str());
+                // .mime 极小且幂等;直接写(撕裂的 mime 只触发重取,不致坏图)
                 std::ofstream mo((cf + ".mime").c_str()); if (mo) mo << mimeType;
             }
 #endif
