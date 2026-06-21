@@ -6,6 +6,7 @@
 #include <osgDB/FileNameUtils>
 #include <osgDB/FileUtils>
 #include <osgUtil/SmoothingVisitor>
+#include <mutex>
 
 #include <modeling/Math.h>
 #include <pipeline/Utilities.h>
@@ -108,7 +109,8 @@ osg::Image* TileCallback::decodeTerrarium(const osg::Image* src)
 osg::Texture* TileCallback::createLayerImage(LayerType id, bool& emptyPath, const osgDB::Options* opt,
                                              osg::NodeVisitor::ImageRequestHandler* irh)
 {
-    std::string inputAddr = _layerPaths[(int)id].first;
+    std::map<int, DataPathPair>::iterator _lpit = _layerPaths.find((int)id);
+    std::string inputAddr = (_lpit != _layerPaths.end()) ? _lpit->second.first : std::string();
     emptyPath = (inputAddr.empty()); if (emptyPath) return NULL;
 
     std::string url = _createPathFunc ? _createPathFunc((int)id, inputAddr, _x, _y, _z)
@@ -141,7 +143,8 @@ osg::Texture* TileCallback::createLayerImage(LayerType id, bool& emptyPath, cons
 
 TileGeometryHandler* TileCallback::createLayerHandler(LayerType id, bool& emptyPath, const osgDB::Options* opt)
 {
-    std::string inputAddr = _layerPaths[(int)id].first;
+    std::map<int, DataPathPair>::iterator _lpit = _layerPaths.find((int)id);
+    std::string inputAddr = (_lpit != _layerPaths.end()) ? _lpit->second.first : std::string();
     emptyPath = (inputAddr.empty()); if (emptyPath) return NULL;
 
     std::string url = _createPathFunc ? _createPathFunc((int)id, inputAddr, _x, _y, _z)
@@ -702,6 +705,7 @@ bool TileManager::isHandlerExtension(const std::string& ext, std::string& sugges
 
 osgDB::ReaderWriter* TileManager::getReaderWriter(const std::string& protocol, const std::string& url)
 {
+    std::lock_guard<std::mutex> _lock(_cachedRWMutex);
     std::map<std::string, osg::observer_ptr<osgDB::ReaderWriter>>::iterator it = _cachedReaderWriters.find(protocol);
     if (it != _cachedReaderWriters.end()) return it->second.get();
     std::string ext = osgDB::getFileExtension(url); it = _cachedReaderWriters.find(ext);

@@ -6,6 +6,7 @@
 #include <osgDB/FileUtils>
 #include <osgDB/FileCache>
 #include <algorithm>
+#include <mutex>
 
 #include "3rdparty/libhv/all/client/requests.h"
 #include <readerwriter/Utilities.h>
@@ -375,6 +376,7 @@ protected:
     osgDB::ReaderWriter* getReaderWriter(const std::string& extOrMime, bool isExt) const
     {
         if (extOrMime.empty()) return NULL;
+        std::lock_guard<std::mutex> _lock(_cachedRWMutex);
         std::map<std::string, std::string>::const_iterator m = isExt ? _mimeTypes.end() : _mimeTypes.find(extOrMime);
         std::map<std::string, osg::observer_ptr<osgDB::ReaderWriter>>::const_iterator
             it = _cachedReaderWriters.find(extOrMime);
@@ -387,6 +389,7 @@ protected:
     }
 
     std::map<std::string, osg::observer_ptr<osgDB::ReaderWriter>> _cachedReaderWriters;
+    mutable std::mutex _cachedRWMutex;  // 并行瓦片加载:保护 _cachedReaderWriters(本函数 const)
     std::map<std::string, std::string> _mimeTypes;
 };
 
