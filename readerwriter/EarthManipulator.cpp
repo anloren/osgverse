@@ -2,6 +2,8 @@
 #include <osg/io_utils>
 #include <osgUtil/LineSegmentIntersector>
 #include <iostream>
+#include <cstdio>
+#include <cstdlib>
 #include "EarthManipulator.h"
 using namespace osgVerse;
 
@@ -206,6 +208,31 @@ void EarthManipulator::init(const osgGA::GUIEventAdapter& ea, osgGA::GUIActionAd
 
 bool EarthManipulator::handle(const osgGA::GUIEventAdapter& ea, osgGA::GUIActionAdapter& us)
 {
+    // 诊断钩子(EARTH_INPUT_DEBUG=1):把进入 manipulator 的鼠标事件写到 /tmp/earth_input.log，
+    // 定位"地球操作失灵"= 被上游(ImGui)吃掉(handled=1)/ 粘住修饰键(modkey)/ NaN 旋转 / 还是别的。诊断后即删。
+    static const bool s_inputDebug = (getenv("EARTH_INPUT_DEBUG") != NULL);
+    if (s_inputDebug)
+    {
+        int et = (int)ea.getEventType();
+        if (et == osgGA::GUIEventAdapter::PUSH || et == osgGA::GUIEventAdapter::RELEASE ||
+            et == osgGA::GUIEventAdapter::DRAG || et == osgGA::GUIEventAdapter::SCROLL ||
+            et == osgGA::GUIEventAdapter::DOUBLECLICK)
+        {
+            const char* nm = (et == osgGA::GUIEventAdapter::PUSH) ? "PUSH" :
+                             (et == osgGA::GUIEventAdapter::RELEASE) ? "RELEASE" :
+                             (et == osgGA::GUIEventAdapter::DRAG) ? "DRAG" :
+                             (et == osgGA::GUIEventAdapter::SCROLL) ? "SCROLL" : "DCLICK";
+            FILE* f = fopen("/tmp/earth_input.log", "a");
+            if (f)
+            {
+                fprintf(f, "[input] %-7s handled=%d modkey=0x%x btn=0x%x worldRotNaN=%d\n",
+                        nm, ea.getHandled() ? 1 : 0, (int)ea.getModKeyMask(),
+                        (int)ea.getButtonMask(),
+                        (_worldRotation.x() != _worldRotation.x()) ? 1 : 0);
+                fclose(f);
+            }
+        }
+    }
     if (ea.getHandled() || ea.getModKeyMask() > 0) return false;
     switch (ea.getEventType())
     {
