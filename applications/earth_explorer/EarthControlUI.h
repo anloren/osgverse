@@ -2,6 +2,7 @@
 #define EARTH_CONTROL_UI_H
 
 #include <cmath>
+#include <cstdlib>
 #include <ctime>
 #include <osg/Vec3d>
 #include <osgViewer/Viewer>
@@ -23,6 +24,7 @@ struct EarthControlUI : public osgVerse::ImGuiContentHandler
     LayerManager* _layers = nullptr;   // 由 main 注入
     float _sunAz, _sunEl;     // 太阳方位角/高度角（度）
     float _exposure;          // HDR 曝光
+    bool  _exposureAuto;      // 自适应曝光(随高度):低空高曝光、高空低曝光
     float _globalOpaque;      // 大气强度
     bool  _ocean;             // 海洋开关
     float _gotoLat, _gotoLon, _gotoAltKm;            // 跳转目标
@@ -31,7 +33,7 @@ struct EarthControlUI : public osgVerse::ImGuiContentHandler
     int  _year, _month, _day; float _utcHour;
 
     EarthControlUI(osgVerse::EarthManipulator* m, osgVerse::EarthAtmosphereOcean* e, osgViewer::Viewer* v)
-        : _mani(m), _earth(e), _viewer(v), _sunAz(0.0f), _sunEl(0.0f), _exposure(0.25f), _globalOpaque(1.0f), _ocean(true)
+        : _mani(m), _earth(e), _viewer(v), _sunAz(0.0f), _sunEl(0.0f), _exposure(0.25f), _exposureAuto(true), _globalOpaque(1.0f), _ocean(true)
         , _gotoLat(35.36f), _gotoLon(138.73f), _gotoAltKm(50.0f), _bookmarkTime(0)
         , _realTimeSun(false), _followClock(true), _year(2024), _month(6), _day(21), _utcHour(18.0f) {}
 
@@ -58,11 +60,31 @@ struct EarthControlUI : public osgVerse::ImGuiContentHandler
         _earth->commonUniforms["WorldSunDir"]->set(osg::Vec3(ecef));
     }
 
+    // 随高度自适应曝光:低空 inscatter 弱、画面塌暗→高曝光;高空 inscatter 强、本就亮→低曝光防过曝。
+    // 只设 HdrExposure uniform,着色器逻辑不动。阈值/值用 env 暴露便于不重编调:
+    // EARTH_EXP_LO / EARTH_EXP_HI(低/高空曝光)、EARTH_EXP_ALTLO / EARTH_EXP_ALTHI(过渡高度,km)。
+    float adaptiveExposure(double altM) const
+    {
+        static const float expLo = []{ const char* e = getenv("EARTH_EXP_LO"); return e ? (float)atof(e) : 1.0f; }();
+        static const float expHi = []{ const char* e = getenv("EARTH_EXP_HI"); return e ? (float)atof(e) : 0.25f; }();
+        static const double altLo = []{ const char* e = getenv("EARTH_EXP_ALTLO"); return e ? atof(e) * 1000.0 : 80000.0; }();
+        static const double altHi = []{ const char* e = getenv("EARTH_EXP_ALTHI"); return e ? atof(e) * 1000.0 : 4000000.0; }();
+        double t = (altM - altLo) / (altHi - altLo);
+        if (t < 0.0) t = 0.0; else if (t > 1.0) t = 1.0;
+        t = t * t * (3.0 - 2.0 * t);  // smoothstep
+        return (float)(expLo * (1.0 - t) + expHi * t);
+    }
+
     virtual void runInternal(osgVerse::ImGuiManager* mgr)
     {
         ImFont* font = ImGuiFonts.count("LXGWFasmartGothic") ? ImGuiFonts["LXGWFasmartGothic"] : NULL;
         if (font) ImGui::PushFont(font);
         if (_realTimeSun) applyRealtimeSun();
+        if (_exposureAuto)
+        {
+            _exposure = adaptiveExposure(_mani->computeEyeLatLonHeight()[2]);  // 米
+            _earth->commonUniforms["HdrExposure"]->set(_exposure);
+        }
         ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);
         // 自适应内容高度，不出现滚动条
         if (ImGui::Begin("Earth Control / 地球控制台", NULL,
@@ -109,8 +131,11 @@ struct EarthControlUI : public osgVerse::ImGuiContentHandler
             {
                 if (ImGui::Checkbox(u8"海洋 Ocean", &_ocean))
                     _earth->commonUniforms["OceanOpaque"]->set(_ocean ? 1.0f : 0.0f);
-                if (ImGui::SliderFloat(u8"曝光 Exposure", &_exposure, 0.05f, 1.0f, "%.2f"))
+                ImGui::Checkbox(u8"自适应曝光 Auto", &_exposureAuto);
+                if (_exposureAuto) ImGui::BeginDisabled();
+                if (ImGui::SliderFloat(u8"曝光 Exposure", &_exposure, 0.05f, 1.5f, "%.2f"))
                     _earth->commonUniforms["HdrExposure"]->set(_exposure);
+                if (_exposureAuto) ImGui::EndDisabled();
                 if (ImGui::SliderFloat(u8"大气强度 Atmosphere", &_globalOpaque, 0.0f, 1.0f, "%.2f"))
                     _earth->commonUniforms["GlobalOpaque"]->set(_globalOpaque);
             }
