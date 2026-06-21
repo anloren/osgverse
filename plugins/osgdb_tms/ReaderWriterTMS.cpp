@@ -7,9 +7,80 @@
 #include <osgDB/FileUtils>
 #include <osgDB/ReadFile>
 
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <atomic>
+#include <deque>
+#include <functional>
+#include <vector>
+#include <cstdlib>
+
 #include <pipeline/Utilities.h>
 #include <readerwriter/Utilities.h>
 #include <readerwriter/TileCallback.h>
+
+namespace {
+// 常驻 keep-alive 线程池:并行拉取一块瓦片的多层。worker 复用 loadFileData 的 thread_local 长连接
+// (临时线程会每次重握 TLS、反更慢)。故意 leak 的 Meyers 单例 + worker detach,避免退出时析构被
+// detached worker 访问的队列(use-after-free)。EARTH_TILE_POOL:worker 数(默认 8,0=关)。
+class LayerLoadPool
+{
+public:
+    static LayerLoadPool& instance() { static LayerLoadPool* s = new LayerLoadPool(); return *s; }
+
+    // tasks[0] 在调用线程 inline 跑(其 keep-alive 不闲置);其余派发到池;全部完成才返回。
+    // 池关闭(workers<=0)或 tasks<=1 → 全部 inline(=原串行行为)。
+    void runAll(const std::vector<std::function<void()> >& tasks)
+    {
+        size_t n = tasks.size();
+        if (_workers <= 0 || n <= 1) { for (size_t i = 0; i < n; ++i) tasks[i](); return; }
+
+        struct Latch {
+            std::mutex m; std::condition_variable cv; int count;
+            Latch(int c) : count(c) {}
+            void down() { std::lock_guard<std::mutex> lk(m); if (--count == 0) cv.notify_all(); }
+            void wait() { std::unique_lock<std::mutex> lk(m); cv.wait(lk, [this]{ return count == 0; }); }
+        } latch((int)(n - 1));
+
+        {
+            std::lock_guard<std::mutex> lk(_qmutex);
+            for (size_t i = 1; i < n; ++i)
+                _queue.push_back([&tasks, i, &latch]() { try { tasks[i](); } catch (...) {} latch.down(); });
+        }
+        _qcv.notify_all();
+        tasks[0]();      // 调用线程 inline 跑 tasks[0]
+        latch.wait();    // 等派发出去的完成(latch/tasks 在本栈帧,wait 期间存活)
+    }
+
+private:
+    LayerLoadPool()
+    {
+        const char* env = getenv("EARTH_TILE_POOL");
+        _workers = env ? atoi(env) : 8;
+        if (_workers < 0) _workers = 0;
+        for (int i = 0; i < _workers; ++i)
+            std::thread([this]() { workerLoop(); }).detach();
+    }
+    void workerLoop()
+    {
+        for (;;)
+        {
+            std::function<void()> task;
+            {
+                std::unique_lock<std::mutex> lk(_qmutex);
+                _qcv.wait(lk, [this]{ return !_queue.empty(); });
+                task = _queue.front(); _queue.pop_front();
+            }
+            task();
+        }
+    }
+    int _workers;
+    std::mutex _qmutex;
+    std::condition_variable _qcv;
+    std::deque<std::function<void()> > _queue;
+};
+}  // namespace
 
 // WebMercatorTiles: (0-0-0) Lv1 = 00,01,10,11, ...; (0-0-x) Lv0 = 00,01,10,11, ...
 // WGS84Tiles: (0-0-0) Lv1 = 00,10, Lv2 = 00,01,10,11,20,21,30,31, ...; (0-0-x) Lv0 = 00,10, ...
@@ -214,22 +285,28 @@ protected:
 
         osg::Matrix localMatrix; osg::ref_ptr<osg::Texture> elevImage;
         osg::ref_ptr<osgVerse::TileGeometryHandler> elevHandler;
-        bool emptyPath0 = false, emptyPath1 = false, allLayersDone = true;
-        osgVerse::TileCallback::LayerState failState = osgVerse::TileCallback::DEFERRED;
-        if (elevH)
-            elevHandler = tileCB->createLayerHandler(osgVerse::TileCallback::ELEVATION, emptyPath0, opt);
-        else
-            elevImage = tileCB->createLayerImage(osgVerse::TileCallback::ELEVATION, emptyPath0, opt);
-        if (!elevHandler && !elevImage && !emptyPath0)
-            { tileCB->setLayerPathState(osgVerse::TileCallback::ELEVATION, failState); allLayersDone = false; }
+        osg::ref_ptr<osg::Texture> orthImage, maskImage, userImage, overlayImage;
+        // 每层各自的 emptyPath(原 elevation/ortho 共用 emptyPath0,并行下是 data race,拆开)
+        bool emptyPathE = false, emptyPath0 = false, emptyPath1 = false, emptyPathU = false, emptyPathO = false;
 
-        osg::ref_ptr<osg::Texture> orthImage = tileCB->createLayerImage(osgVerse::TileCallback::ORTHOPHOTO, emptyPath0, opt);
-        osg::ref_ptr<osg::Texture> maskImage = tileCB->createLayerImage(osgVerse::TileCallback::OCEAN_MASK, emptyPath1, opt);
-        bool emptyPathU = false;
-        osg::ref_ptr<osg::Texture> userImage = tileCB->createLayerImage(osgVerse::TileCallback::USER, emptyPathU, opt);
-        bool emptyPathO = false;
-        osg::ref_ptr<osg::Texture> overlayImage =
-            tileCB->createLayerImage(osgVerse::TileCallback::OVERLAY, emptyPathO, opt);
+        // 5 层包成 lambda,走常驻线程池并行拉取(池关时 = 原串行)。tileCB/opt 只读、各层写各自的输出与
+        // emptyPath → 并发安全(配合上一个 commit 的缓存加锁 + find())。
+        std::vector<std::function<void()> > layerTasks;
+        layerTasks.push_back([&]() {
+            if (elevH) elevHandler = tileCB->createLayerHandler(osgVerse::TileCallback::ELEVATION, emptyPathE, opt);
+            else       elevImage   = tileCB->createLayerImage(osgVerse::TileCallback::ELEVATION, emptyPathE, opt);
+        });
+        layerTasks.push_back([&]() { orthImage    = tileCB->createLayerImage(osgVerse::TileCallback::ORTHOPHOTO, emptyPath0, opt); });
+        layerTasks.push_back([&]() { maskImage    = tileCB->createLayerImage(osgVerse::TileCallback::OCEAN_MASK, emptyPath1, opt); });
+        layerTasks.push_back([&]() { userImage    = tileCB->createLayerImage(osgVerse::TileCallback::USER, emptyPathU, opt); });
+        layerTasks.push_back([&]() { overlayImage = tileCB->createLayerImage(osgVerse::TileCallback::OVERLAY, emptyPathO, opt); });
+        LayerLoadPool::instance().runAll(layerTasks);
+
+        // 失败态/allLayersDone 在并行结束后串行判定(只在调用线程改 tileCB 状态)
+        bool allLayersDone = true;
+        osgVerse::TileCallback::LayerState failState = osgVerse::TileCallback::DEFERRED;
+        if (!elevHandler && !elevImage && !emptyPathE)
+            { tileCB->setLayerPathState(osgVerse::TileCallback::ELEVATION, failState); allLayersDone = false; }
         if (!orthImage && !emptyPath0)
             { tileCB->setLayerPathState(osgVerse::TileCallback::ORTHOPHOTO, failState); allLayersDone = false; }
         if (!maskImage && !emptyPath1)
