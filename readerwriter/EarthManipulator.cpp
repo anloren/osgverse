@@ -12,6 +12,8 @@ static double g_distanceToCenter = 0.0;
 EarthManipulator::EarthManipulator()
 :   _viewer(NULL), _latestLatitude(0.0), _latestLongitude(0.0), _latestAltitude(0.0),
     _minDistance(50.0), _terrainMargin(150.0), _terrainLift(0.0),
+    _terrainProbeLat(0.0), _terrainProbeLon(0.0), _terrainProbeAlt(0.0),
+    _hasTerrainProbe(false), _terrainProbeCountdown(0),
     _tilt(0.0f), _throwAllowed(true), _thrown(false), _locked(false)
 {
     _tiltCenter.set(0.0, 0.0, -DBL_MAX);
@@ -736,13 +738,31 @@ void EarthManipulator::updateTerrainFloor()
     double desiredLift = 0.0;
     if (hEye < 30000.0)  // only near the ground; far/global views are left untouched
     {
-        double hTerrain = 0.0;
-        if (terrainAltitudeAt(lat, lon, hTerrain))
+        // 昂贵的全场景地形求交不必每帧做:地形高度只随相机水平移动 / 瓦片细化变化。仅当
+        // ① 水平移动超过约一个瓦片尺度(~330m)或 ② 帧倒计时到点(周期兜底,捕捉瓦片细化)
+        // 才重测,否则复用缓存高度。这消除低空静止/慢移时每帧遍历整棵场景树的卡顿。
+        bool needProbe = !_hasTerrainProbe || (_terrainProbeCountdown <= 0) ||
+                         (fabs(lat - _terrainProbeLat) + fabs(lon - _terrainProbeLon) > 0.003);
+        if (needProbe)
         {
-            double floorAlt = hTerrain + _terrainMargin;
+            double hTerrain = 0.0;
+            _hasTerrainProbe = terrainAltitudeAt(lat, lon, hTerrain);
+            _terrainProbeAlt = _hasTerrainProbe ? hTerrain : 0.0;
+            _terrainProbeLat = lat; _terrainProbeLon = lon;
+            _terrainProbeCountdown = 15;
+            static const bool s_terrainDebug = (getenv("EARTH_TERRAIN_DEBUG") != NULL);
+            if (s_terrainDebug)
+                OSG_NOTICE << "[terrainfloor] PROBE hEye=" << hEye << " hTerr=" << _terrainProbeAlt << "\n";
+        }
+        else _terrainProbeCountdown--;
+
+        if (_hasTerrainProbe)
+        {
+            double floorAlt = _terrainProbeAlt + _terrainMargin;
             if (hEye < floorAlt) desiredLift = floorAlt - hEye;
         }
     }
+    else { _hasTerrainProbe = false; }  // 离开低空:作废缓存,下次入低空立即重测
 
     // Raise instantly (never allow a frame below terrain), ease down slowly (no pop when a
     // higher-LOD elevation tile streams in and slightly changes the sampled height).

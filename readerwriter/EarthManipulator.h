@@ -283,6 +283,10 @@ namespace osgVerse
         double _minDistance;  // Minimum allowed distance to prevent camera going below surface
         double _terrainMargin;  // Min eye height above the real terrain (global terrain floor)
         double _terrainLift;  // Per-frame vertical lift keeping the eye above terrain (smoothed)
+        // 地形地板求交节流:缓存上次全场景地形求交的位置/高度,避免低空每帧重做。
+        double _terrainProbeLat, _terrainProbeLon, _terrainProbeAlt;
+        bool _hasTerrainProbe;
+        int _terrainProbeCountdown;
         float _tilt;  // Vertical angle to the horizon
 
         unsigned int _intersectionMask;  // Mask for intersection with the earth
