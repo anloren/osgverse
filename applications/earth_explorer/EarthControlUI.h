@@ -13,6 +13,7 @@
 #include <readerwriter/SolarPosition.h>
 #include <modeling/Math.h>
 #include "LayerManager.h"
+#include "quake_data.h"
 
 // EarthExplorer 的 ImGui 控制面板。直接驱动 EarthManipulator 与 EarthAtmosphereOcean，
 // 不经 USER 事件中转。
@@ -22,6 +23,7 @@ struct EarthControlUI : public osgVerse::ImGuiContentHandler
     osgVerse::EarthAtmosphereOcean* _earth;
     osgViewer::Viewer* _viewer;                      // 用于退出程序
     LayerManager* _layers = nullptr;   // 由 main 注入
+    QuakeLayer* _quake = nullptr;      // 由 main 注入
     float _sunAz, _sunEl;     // 太阳方位角/高度角（度）
     float _exposure;          // HDR 曝光
     bool  _exposureAuto;      // 自适应曝光(随高度):低空高曝光、高空低曝光
@@ -174,6 +176,26 @@ struct EarthControlUI : public osgVerse::ImGuiContentHandler
                 }
                 if (groupOpen) ImGui::TreePop();
             }
+            // ---- 地震详情 ----
+            if (_quake)
+            {
+                QuakeInfo q = _quake->getSelected();
+                if (q.valid && ImGui::CollapsingHeader(u8"地震详情 Quake", ImGuiTreeNodeFlags_DefaultOpen))
+                {
+                    ImGui::Text(u8"震级 Mag: M %.1f", q.mag);
+                    ImGui::Text(u8"深度 Depth: %.1f km", q.depthKm);
+                    ImGui::Text(u8"位置 Place: %s", q.place.c_str());
+                    ImGui::Text(u8"经纬 LatLon: %.3f, %.3f", q.lat, q.lon);
+                    long long nowMs = (long long)time(NULL) * 1000;
+                    long long ageMin = (nowMs - q.timeMs) / 60000;
+                    if (ageMin < 60) ImGui::Text(u8"时间 Time: %lld 分钟前", ageMin);
+                    else if (ageMin < 1440) ImGui::Text(u8"时间 Time: %.1f 小时前", ageMin / 60.0);
+                    else ImGui::Text(u8"时间 Time: %.1f 天前", ageMin / 1440.0);
+                    ImGui::TextWrapped(u8"%s", q.url.c_str());
+                    if (ImGui::Button(u8"关闭 Close")) _quake->clearSelected();
+                }
+            }
+
             // ---- 跳转 ----
             if (ImGui::CollapsingHeader(u8"跳转 Go To", ImGuiTreeNodeFlags_DefaultOpen))
             {

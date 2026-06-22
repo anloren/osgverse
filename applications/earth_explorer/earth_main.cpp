@@ -465,6 +465,7 @@ int main(int argc, char** argv)
     imgui->setChineseSimplifiedFont(MISC_DIR + std::string("LXGWFasmartGothic.otf"));
     EarthControlUI* ctrlUI = new EarthControlUI(earthManipulator.get(), &earthRenderingUtils, &viewer);
     ctrlUI->_layers = &layerMgr;
+    ctrlUI->_quake = quakeLayer;
     imgui->initialize(ctrlUI, false);
     imgui->addToView(&viewer, cameras[3]);  // cameras[3] = finalCamera (HUD, renders to screen)
 

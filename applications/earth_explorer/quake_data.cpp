@@ -151,6 +151,9 @@ namespace
 #define GL_PROGRAM_POINT_SIZE 0x8642
 #endif
 
+    static const float kDragThreshPx2    = 25.0f;   // 5px 拖动阈值的平方
+    static const float kPickExtraRadiusPx = 6.0f;   // 拾取容差:点半径外再加的像素裕量
+
     // 由一批 Quake 构建一个 Geode(GL_POINTS)。
     osg::Geode* buildQuakeGeode(const std::vector<Quake>& qs, osg::StateSet* sharedSS)
     {
@@ -206,12 +209,45 @@ namespace
     {
     public:
         QuakeLayerImpl() : _root(nullptr), _enabled(false), _dirty(false), _thread(nullptr) {}
-        virtual void setEnabled(bool on) { _enabled = on; if (_root) _root->setNodeMask(on ? ~0u : 0u); }
+        virtual void setEnabled(bool on) { _enabled = on; if (_root) _root->setNodeMask(on ? ~0u : 0u); if (!on) clearSelected(); }
 
         void startFetch() { if (!_thread) { _thread = new FetchThread(this); _thread->startThread(); } }
         virtual bool isEnabled() const { return _enabled; }
-        virtual QuakeInfo getSelected() const { return QuakeInfo(); }
-        virtual void clearSelected() {}
+        virtual QuakeInfo getSelected() const
+        {
+            OpenThreads::ScopedLock<OpenThreads::Mutex> lk(_selMutex);
+            return _selected;
+        }
+        virtual void clearSelected()
+        { OpenThreads::ScopedLock<OpenThreads::Mutex> lk(_selMutex); _selected = QuakeInfo(); }
+
+        // 屏幕拾取:相机 + 窗口鼠标坐标(y 向上)。选最近的前半球地震。仅主线程调用。
+        void pickAt(osg::Camera* cam, float mx, float my)
+        {
+            if (!_enabled || _quakes.empty() || !cam->getViewport()) return;
+            osg::Vec3d eye, center, up; cam->getViewMatrixAsLookAt(eye, center, up);
+            osg::Matrixd VPW = cam->getViewMatrix() * cam->getProjectionMatrix()
+                             * cam->getViewport()->computeWindowMatrix();
+            double bestD2 = 1e18; int best = -1;
+            for (size_t i = 0; i < _quakes.size(); ++i)
+            {
+                const osg::Vec3d& P = _quakes[i].ecef;
+                if ((eye * P) <= (P * P)) continue;            // 前半球:dot(eye,P) > |P|^2
+                osg::Vec3d win = P * VPW;
+                if (win.z() < 0.0 || win.z() > 1.0) continue;  // 裁剪范围外
+                double d2 = (win.x() - mx) * (win.x() - mx) + (win.y() - my) * (win.y() - my);
+                float tol = magSizePx(_quakes[i].mag) * 0.5f + kPickExtraRadiusPx;
+                if (d2 < (double)(tol * tol) && d2 < bestD2) { bestD2 = d2; best = (int)i; }
+            }
+            if (best >= 0)
+            {
+                const Quake& q = _quakes[best];
+                QuakeInfo info; info.valid = true;
+                info.lon = q.lon; info.lat = q.lat; info.depthKm = q.depthKm; info.mag = q.mag;
+                info.timeMs = q.timeMs; info.place = q.place; info.url = q.url;
+                OpenThreads::ScopedLock<OpenThreads::Mutex> lk(_selMutex); _selected = info;
+            }
+        }
 
         osg::Group* root() { return _root; }
 
@@ -265,6 +301,42 @@ namespace
         OpenThreads::Mutex _mutex;
         bool _enabled, _dirty;
         FetchThread* _thread;
+        QuakeInfo _selected;
+        mutable OpenThreads::Mutex _selMutex;
+    };
+
+    class QuakePickHandler : public osgGA::GUIEventHandler
+    {
+    public:
+        QuakePickHandler(QuakeLayerImpl* o) : _owner(o), _downX(0.0f), _downY(0.0f), _pushed(false) {}
+        virtual bool handle(const osgGA::GUIEventAdapter& ea, osgGA::GUIActionAdapter& aa)
+        {
+            if (ea.getEventType() == osgGA::GUIEventAdapter::PUSH
+                && ea.getButton() == osgGA::GUIEventAdapter::LEFT_MOUSE_BUTTON)
+            { _downX = ea.getX(); _downY = ea.getY(); _pushed = true; }
+            else if (ea.getEventType() == osgGA::GUIEventAdapter::RELEASE
+                     && ea.getButton() == osgGA::GUIEventAdapter::LEFT_MOUSE_BUTTON)
+            {
+                float dx = ea.getX() - _downX, dy = ea.getY() - _downY;
+                if (_pushed && dx * dx + dy * dy < kDragThreshPx2)   // 点击(非拖动)
+                {
+                    osgViewer::View* view = static_cast<osgViewer::View*>(&aa);
+                    osg::Camera* cam = view->getCamera();
+                    const osg::Viewport* vp = cam->getViewport();
+                    if (vp)
+                    {
+                        float my = ea.getY();
+                        if (ea.getMouseYOrientation() == osgGA::GUIEventAdapter::Y_INCREASING_DOWNWARDS)
+                            my = vp->height() - my;
+                        _owner->pickAt(cam, ea.getX(), my);
+                    }
+                }
+                _pushed = false;
+            }
+            return false;   // 不拦截,放行给 manipulator
+        }
+    protected:
+        QuakeLayerImpl* _owner; float _downX, _downY; bool _pushed;
     };
 
     void SyncCallback::operator()(osg::Node* node, osg::NodeVisitor* nv)
@@ -296,5 +368,6 @@ osg::Node* configureQuakeData(osgViewer::View& viewer, osg::Node* earthRoot,
     root->setUserData(impl.get());
     if (outLayer) *outLayer = impl.get();
     impl->startFetch();   // 线程常驻;仅 isEnabled() 时才真正联网
+    viewer.addEventHandler(new QuakePickHandler(impl.get()));
     return root;
 }
