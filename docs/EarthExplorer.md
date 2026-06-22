@@ -105,3 +105,4 @@ EARTH_TILE_CACHE=/Volumes/SSD/earth_cache packaging/run.sh
 |------|------|
 | `EARTH_QUAKES=1` | 启动即强制开启地震图层（无界面验证用） |
 | `EARTH_QUAKES_FILE=<路径>` | 用本地 GeoJSON 文件替代联网抓取（离线/确定性测试用） |
+| `EARTH_QUAKE_PICKDBG=1` | 场景稳定后跑一次拾取自测，打印各点投影坐标与自拾取结果（headless 调试拾取链路用） |

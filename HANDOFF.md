@@ -13,7 +13,8 @@
 - 渲染:`GL_POINTS` 圆点精灵(独立 shader,MRT 双输出 gl_FragData[0/1],非 globe 着色器),**大小∝震级、颜色∝深度**(浅红/中橙/深蓝),ECEF 抬升 3km、深度测试遮挡背面。
 - 实时:后台 `FetchThread` **每 ~60s** 刷新,**仅图层开启时联网**(关闭空转);`requests` 设 15s 超时界定退出 join。主线程 update 回调重建几何(worker 不碰 GL)。
 - 交互:**点击地震点**(屏幕拾取 + 前半球过滤)→ ImGui「地震详情」卡片(震级/深度/位置/经纬/相对时间/USGS 链接)。
-- UI:面板新增「实时数据 / Live」分组 +「地震 (USGS)」开关(默认关)。测试钩子 `EARTH_QUAKES=1`(强制开)、`EARTH_QUAKES_FILE=<path>`(本地样本离线验证)。
+- **拾取 bug 已修(用户报告点击无卡片,系统化调试找到根因)**:`pickAt` 原有 `win.z∈[0,1]` 深度闸门把所有点都剔除了——事件阶段读到的相机投影近/远≠渲染时那套(osgViewer 在 cull 才按场景包围盒重算近/远,地球在 RTT 子相机渲染),地表点 z 饱和到 ≈1.0001。前半球测试已负责剔背面,故删掉脆弱的 z 闸门(只用 win.x/y),拾取容差 6→10px。新增 `EARTH_QUAKE_PICKDBG` 自测钩子(投影全表+自拾取)。提交 `24222220`。
+- UI:面板新增「实时数据 / Live」分组 +「地震 (USGS)」开关(默认关)。测试钩子 `EARTH_QUAKES=1`(强制开)、`EARTH_QUAKES_FILE=<path>`(本地样本离线验证)、`EARTH_QUAKE_PICKDBG=1`(拾取自测)。
 - 设计/计划文档:`docs/superpowers/specs/2026-06-22-earth-quake-precip-overlays-design.md`、`docs/superpowers/plans/2026-06-22-earth-quake-layer.md`。
 - **下一步 = Step 2 降水**(RainViewer 雷达,复用云图 OVERLAY 槽、二选一、零着色器改动),设计已记入上面 spec。
 - 终审 1 条 minor 备注(非阻塞):`QuakePickHandler`/`EarthControlUI` 持 `QuakeLayerImpl` 裸指针,当前"全随进程退出销毁"生命周期下无害(city_data 同款风格);若日后模块复用需改 observer_ptr。
