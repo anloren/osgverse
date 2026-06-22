@@ -96,22 +96,43 @@ struct Quake { double lon, lat, depthKm, mag; long long timeMs; std::string plac
 
 ---
 
-# Step 2:降水层(设计记录 — Step 1 验证通过后再实现)
+# Step 2:降水层 RainViewer(细化设计 — 2026-06-23 用户确认"先这样")
 
-## 数据源
+**复用云图的 OVERLAY 槽,零着色器改动。** 机制已读码 + curl 全部验证可行。
 
-- RainViewer 免费雷达瓦片(无 key):
-  1. GET `https://api.rainviewer.com/public/weather-maps.json` → 取 `radar.past` 最新帧的 `time` + `host` + 路径模板;
-  2. 拼 XYZ 瓦片 URL(256px,WebMercator),走**现有 OVERLAY 管线**。
-- ~5–10min 重取帧列表刷新(后台线程,同地震套路)。
+## 数据源(已 curl 验证)
 
-## 接入方式(复用云图槽,零着色器改动)
+- RainViewer `weather-maps.json`(无 key):`GET https://api.rainviewer.com/public/weather-maps.json` → `host`(如 `https://tilecache.rainviewer.com`)+ `radar.past[]`(每项 `{time, path}`,**path 是哈希如 `/v2/radar/7f68c5ecd736`,直接用此字段,别从 time 拼**)。取 `radar.past` 最后一项 = 最新观测帧。约每 10min 一帧(返回约 13 帧 ≈ 2h)。
+- 瓦片模板:`{host}{path}/256/{z}/{x}/{y}/{color}/{options}.png`,默认 `color=4`、`options=1_1`(平滑+含雪)→ 例 `https://tilecache.rainviewer.com/v2/radar/<hash>/256/{z}/{x}/{y}/4/1_1.png`。
+- 瓦片实测:HTTP 200、`image/png`、256×256 **RGBA(带 alpha)** → 无降水/无覆盖处透明,叠加合成天然干净。XYZ webmercator(原点左上,沿用现有 `yXYZ` 翻转)。
 
-- `createCustomPath` 的 OVERLAY 分支按一个**模式变量**切换 URL:GIBS 云图 / RainViewer 雷达。
-- UI 把「GIBS 影像/云图」改成三选一:**叠加层:无 / GIBS云图 / 降水雷达**(`Overlay2Opacity` 控制可见,URL 由模式决定)。两者共用一个槽 → **不能同时显示**(已与用户确认接受)。
-- 注意:RainViewer 雷达覆盖以陆地雷达为主(非真全球海洋);瓦片切换需触发现有瓦片重载机制。
+## 接入方式(复用 OVERLAY 槽 + 现有瓦片重载机制)
 
-## 待 Step 2 细化
+读码确认的链路:`createLayerImage` 取 `inputAddr = _layerPaths[OVERLAY].first` → 调 `createCustomPath(type, prefix=inputAddr, x,y,z)`(prefix 空→不加载/移除贴图;URL 空→有意空,如 GIBS z>9)。`TileManager::instance()->setLayerPath(OVERLAY, 路径)` 改全局路径 → 每瓦片 `operator()` 里 `TileManager::check()` 比对、不一致即 `updateLayerData` **重载该层**(city_data 切 USER 层同款)。
 
-- 模式切换如何强制现有瓦片缓存失效/重载(避免显示旧 GIBS 瓦片)。
-- 帧时间戳更新后如何平滑刷新贴图。
+- **`createCustomPath` 的 OVERLAY 分支按 `prefix` 分流**:
+  - `prefix == "gibs"` → 现有 GIBS VIIRS 逻辑(z>9 返回空)。
+  - `prefix` 以 `http` 开头 → 当作 RainViewer 完整模板,`createPath(prefix, x, yXYZ, z)`;z 上限 ~10(雷达分辨率粗,过高返回空)。
+  - 其它(空) → 返回空(不加载叠加瓦片)。
+- **后台控制器**(新模块 `precip_data.{h,cpp}`,复用地震 `FetchThread` 范式):仅降水图层开启时,每 ~8–10min `requests`(15s 超时)抓 `weather-maps.json` → 取最新帧拼模板 → `TileManager::instance()->setLayerPath(OVERLAY, 模板)`。最新帧 `path` 变了才重设(避免无谓重载)。关闭时空转。
+
+## 互斥 + UI(三选一:无 / 云图 / 降水)
+
+「影像 / 天气」组两个互斥复选框:「GIBS 影像/云图」(原有)、「降水雷达 RainViewer」(新,`PointFeed`? 否——栅格层,`hasOpacity=true`)。apply 回调强制互斥:
+- 降水 ON → 强制云图 OFF;通知控制器开始抓帧(它会 `setLayerPath(OVERLAY, RV模板)`);`Overlay2Opacity` = 降水透明度。
+- 降水 OFF → 控制器停;`setLayerPath(OVERLAY, "gibs")`;`Overlay2Opacity` = 云图开?云图透明度:0。
+- 云图 ON → 强制降水 OFF(连带控制器停 + 路径回 "gibs")。
+- 两者皆关 → OVERLAY 路径保持 "gibs"(已加载、opacity 0,同现状),三选一中的"无"。
+
+## 测试钩子
+
+- `EARTH_PRECIP=1`:启动即强制开降水层(同 `EARTH_CLOUDS`/`EARTH_QUAKES`)。
+- `EARTH_PRECIP_FILE=<path>`:用本地 `weather-maps.json` 替代联网(离线/确定性验证)。
+
+## 验证计划
+
+headless:`EARTH_PRECIP=1`(+ 可选 `EARTH_PRECIP_FILE` 固定样本)→ 确认 RainViewer 瓦片加载、陆地降水可见;确认互斥(开降水自动关云图、OVERLAY 路径切到 RV、再关切回 gibs);确认 4 类回归不可能(未碰 `scattering_globe.frag.glsl`/sun/OceanOpaque)。真机:开关切换、~10min 刷新、低空看陆地雨区。
+
+## 明确不做(YAGNI)
+
+nowcast 预测帧、历史回放/时间轴、色板/选项的运行时切换 UI(先写死 color=4/options=1_1,后续按需)。RainViewer 海洋无雷达覆盖属数据本身,不补。
