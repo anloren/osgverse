@@ -152,7 +152,7 @@ namespace
 #endif
 
     static const float kDragThreshPx2    = 25.0f;   // 5px 拖动阈值的平方
-    static const float kPickExtraRadiusPx = 6.0f;   // 拾取容差:点半径外再加的像素裕量
+    static const float kPickExtraRadiusPx = 10.0f;  // 拾取容差:点半径外再加的像素裕量(小点也好点)
 
     // 由一批 Quake 构建一个 Geode(GL_POINTS)。
     osg::Geode* buildQuakeGeode(const std::vector<Quake>& qs, osg::StateSet* sharedSS)
@@ -232,9 +232,11 @@ namespace
             for (size_t i = 0; i < _quakes.size(); ++i)
             {
                 const osg::Vec3d& P = _quakes[i].ecef;
-                if ((eye * P) <= (P * P)) continue;            // 前半球:dot(eye,P) > |P|^2
+                if ((eye * P) <= (P * P)) continue;            // 前半球:dot(eye,P) > |P|^2(已能剔背面)
                 osg::Vec3d win = P * VPW;
-                if (win.z() < 0.0 || win.z() > 1.0) continue;  // 裁剪范围外
+                // 只用 win.x/y 像素坐标。不查 win.z:事件阶段读到的相机投影近/远非渲染时
+                // 那套(osgViewer 在 cull 才按场景包围盒重算近/远),地表点 z 会饱和到 ≈1.0001,
+                // 用 [0,1] 闸门会误剔全部点(本 bug 根因)。前半球测试已负责可见性剔除。
                 double d2 = (win.x() - mx) * (win.x() - mx) + (win.y() - my) * (win.y() - my);
                 float tol = magSizePx(_quakes[i].mag) * 0.5f + kPickExtraRadiusPx;
                 if (d2 < (double)(tol * tol) && d2 < bestD2) { bestD2 = d2; best = (int)i; }
@@ -247,6 +249,39 @@ namespace
                 info.timeMs = q.timeMs; info.place = q.place; info.url = q.url;
                 OpenThreads::ScopedLock<OpenThreads::Mutex> lk(_selMutex); _selected = info;
             }
+        }
+
+        // 测试钩子 EARTH_QUAKE_PICKDBG:headless 投影全部地震点 + 自拾取自测(无界面验证拾取链路)。
+        void debugPick(osg::Camera* cam)
+        {
+            std::cout << "[PickDBG] enabled=" << _enabled << " nQuakes=" << _quakes.size();
+            if (!cam || !cam->getViewport()) { std::cout << " NO_VIEWPORT\n"; return; }
+            osg::Vec3d eye, center, up; cam->getViewMatrixAsLookAt(eye, center, up);
+            osg::Matrixd VPW = cam->getViewMatrix() * cam->getProjectionMatrix()
+                             * cam->getViewport()->computeWindowMatrix();
+            std::cout << " vp=" << (int)cam->getViewport()->width() << "x" << (int)cam->getViewport()->height()
+                      << " eyeLen=" << eye.length() << "\n";
+            int firstFront = -1;
+            for (size_t i = 0; i < _quakes.size(); ++i)
+            {
+                const osg::Vec3d& P = _quakes[i].ecef;
+                bool front = (eye * P) > (P * P);
+                osg::Vec3d win = P * VPW;
+                std::cout << "[PickDBG] q" << i << " front=" << front
+                          << " win=(" << win.x() << "," << win.y() << "," << win.z() << ")"
+                          << " mag=" << _quakes[i].mag << " " << _quakes[i].place << "\n";
+                if (front && firstFront < 0) firstFront = (int)i;
+            }
+            if (firstFront >= 0)
+            {
+                osg::Vec3d w = _quakes[firstFront].ecef * VPW;
+                std::cout << "[PickDBG] self-pick q" << firstFront << " at (" << w.x() << "," << w.y() << ")\n";
+                clearSelected();
+                pickAt(cam, (float)w.x(), (float)w.y());
+                QuakeInfo s = getSelected();
+                std::cout << "[PickDBG] after self-pick: valid=" << s.valid << " place=" << s.place << "\n";
+            }
+            else std::cout << "[PickDBG] no front-facing on-screen quake\n";
         }
 
         osg::Group* root() { return _root; }
@@ -332,6 +367,18 @@ namespace
                     }
                 }
                 _pushed = false;
+            }
+            else if (ea.getEventType() == osgGA::GUIEventAdapter::FRAME)
+            {
+                // EARTH_QUAKE_PICKDBG=1:场景稳定后跑一次投影/自拾取自测(headless 验证用)
+                static const char* dbg = getenv("EARTH_QUAKE_PICKDBG");
+                static bool dbgDone = false;
+                if (dbg && *dbg && !dbgDone)
+                {
+                    osgViewer::View* view = static_cast<osgViewer::View*>(&aa);
+                    if (view->getFrameStamp()->getFrameNumber() > 250)
+                    { _owner->debugPick(view->getCamera()); dbgDone = true; }
+                }
             }
             return false;   // 不拦截,放行给 manipulator
         }
