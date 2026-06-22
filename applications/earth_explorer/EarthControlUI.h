@@ -176,25 +176,7 @@ struct EarthControlUI : public osgVerse::ImGuiContentHandler
                 }
                 if (groupOpen) ImGui::TreePop();
             }
-            // ---- 地震详情 ----
-            if (_quake)
-            {
-                QuakeInfo q = _quake->getSelected();
-                if (q.valid && ImGui::CollapsingHeader(u8"地震详情 Quake", ImGuiTreeNodeFlags_DefaultOpen))
-                {
-                    ImGui::Text(u8"震级 Mag: M %.1f", q.mag);
-                    ImGui::Text(u8"深度 Depth: %.1f km", q.depthKm);
-                    ImGui::Text(u8"位置 Place: %s", q.place.c_str());
-                    ImGui::Text(u8"经纬 LatLon: %.3f, %.3f", q.lat, q.lon);
-                    long long nowMs = (long long)time(NULL) * 1000;
-                    long long ageMin = (nowMs - q.timeMs) / 60000;
-                    if (ageMin < 60) ImGui::Text(u8"时间 Time: %lld 分钟前", ageMin);
-                    else if (ageMin < 1440) ImGui::Text(u8"时间 Time: %.1f 小时前", ageMin / 60.0);
-                    else ImGui::Text(u8"时间 Time: %.1f 天前", ageMin / 1440.0);
-                    ImGui::TextWrapped(u8"%s", q.url.c_str());
-                    if (ImGui::Button(u8"关闭 Close")) _quake->clearSelected();
-                }
-            }
+            // 地震详情等「信息呈现」UI 不在此操作面板内,统一放右上角独立面板(见 End() 之后)。
 
             // ---- 跳转 ----
             if (ImGui::CollapsingHeader(u8"跳转 Go To", ImGuiTreeNodeFlags_DefaultOpen))
@@ -235,6 +217,36 @@ struct EarthControlUI : public osgVerse::ImGuiContentHandler
                 if (_viewer) _viewer->setDone(true);
         }
         ImGui::End();
+
+        // ===== 信息呈现面板:统一锚定右上角,与左上角操作面板分离;可关闭 =====
+        // 约定(用户偏好):今后所有"呈现信息"的 UI 都放这里(右上角),不要混进上面的操作面板。
+        if (_quake)
+        {
+            QuakeInfo q = _quake->getSelected();
+            if (q.valid)
+            {
+                ImGuiIO& io = ImGui::GetIO();
+                ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 20.0f, 20.0f),
+                                        ImGuiCond_Always, ImVec2(1.0f, 0.0f));  // 右上角锚定
+                bool open = true;
+                if (ImGui::Begin(u8"地震详情 Quake", &open,
+                                 ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse))
+                {
+                    ImGui::Text(u8"震级 Mag: M %.1f", q.mag);
+                    ImGui::Text(u8"深度 Depth: %.1f km", q.depthKm);
+                    ImGui::Text(u8"位置 Place: %s", q.place.c_str());
+                    ImGui::Text(u8"经纬 LatLon: %.3f, %.3f", q.lat, q.lon);
+                    long long nowMs = (long long)time(NULL) * 1000;
+                    long long ageMin = (nowMs - q.timeMs) / 60000;
+                    if (ageMin < 60) ImGui::Text(u8"时间 Time: %lld 分钟前", ageMin);
+                    else if (ageMin < 1440) ImGui::Text(u8"时间 Time: %.1f 小时前", ageMin / 60.0);
+                    else ImGui::Text(u8"时间 Time: %.1f 天前", ageMin / 1440.0);
+                    ImGui::TextWrapped(u8"%s", q.url.c_str());
+                }
+                ImGui::End();
+                if (!open) _quake->clearSelected();  // 点标题栏 [x] 关闭 → 清除选中
+            }
+        }
         if (font) ImGui::PopFont();
     }
 };
