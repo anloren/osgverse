@@ -158,7 +158,5 @@ osg::ref_ptr<PrecipController> configurePrecipLayer(osgViewer::View& viewer)
     osg::ref_ptr<PrecipControllerImpl> c(new PrecipControllerImpl);
     c->startFetch();   // 线程常驻;仅 isEnabled() 时联网
     viewer.addEventHandler(new PrecipApplyHandler(c.get()));   // 主线程应用待定模板
-    // 临时(Task 4 删,改由图层 apply 驱动):env 强制开,供 headless 验证。
-    if (getenv("EARTH_PRECIP_FILE") || getenv("EARTH_PRECIP")) c->setEnabled(true);
     return c;   // ref_ptr<PrecipControllerImpl> → ref_ptr<PrecipController> 隐式上转
 }

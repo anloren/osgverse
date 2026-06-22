@@ -433,14 +433,49 @@ int main(int argc, char** argv)
         };
         layerMgr.add(labels);
 
+        LayerManager* lmptr = &layerMgr;
+        PrecipController* pcptr = precip.get();
+        // OVERLAY 槽可见度:降水开→降水透明度;否则云图开→云图透明度;都关→0。
+        auto applyOverlayOpacity = [eptr, lmptr]() {   // eptr/lmptr 为裸指针,浅复制进 lambda(对象会话期存活)
+            float op = 0.0f;
+            OverlayLayer* cl = lmptr->find("clouds");
+            OverlayLayer* pp = lmptr->find("precip");
+            if (pp && pp->enabled) op = pp->opacity;
+            else if (cl && cl->enabled) op = cl->opacity;
+            if (eptr->commonUniforms.count("Overlay2Opacity"))
+                eptr->commonUniforms["Overlay2Opacity"]->set(op);
+        };
+
         OverlayLayer clouds; clouds.id = "clouds"; clouds.displayName = u8"GIBS 影像/云图";
         clouds.group = u8"影像 / 天气"; clouds.enabled = false; clouds.hasOpacity = true; clouds.opacity = 0.7f;
-        clouds.apply = [eptr](const OverlayLayer& l) {
-            float v = l.enabled ? l.opacity : 0.0f;
-            if (eptr->commonUniforms.count("Overlay2Opacity"))
-                eptr->commonUniforms["Overlay2Opacity"]->set(v);
+        clouds.apply = [lmptr, pcptr, applyOverlayOpacity](const OverlayLayer& l) {
+            if (l.enabled)   // 互斥:开云图 → 关降水 + OVERLAY 切回 gibs
+            {
+                if (OverlayLayer* pp = lmptr->find("precip")) pp->enabled = false;
+                if (pcptr) pcptr->setEnabled(false);
+                osgVerse::TileManager::instance()->setLayerPath(osgVerse::TileCallback::OVERLAY, "gibs");
+            }
+            applyOverlayOpacity();
         };
         layerMgr.add(clouds);
+
+        OverlayLayer precipL; precipL.id = "precip"; precipL.displayName = u8"降水雷达 RainViewer";
+        precipL.group = u8"影像 / 天气"; precipL.enabled = false; precipL.hasOpacity = true; precipL.opacity = 0.85f;
+        precipL.apply = [lmptr, pcptr, applyOverlayOpacity](const OverlayLayer& l) {
+            if (l.enabled)   // 互斥:开降水 → 关云图;先清 OVERLAY,待控制器拼好 RV 模板再上
+            {
+                if (OverlayLayer* cl = lmptr->find("clouds")) cl->enabled = false;
+                osgVerse::TileManager::instance()->setLayerPath(osgVerse::TileCallback::OVERLAY, "");
+                if (pcptr) pcptr->setEnabled(true);   // 控制器抓帧后由主线程 FRAME handler setLayerPath(OVERLAY, RV模板)
+            }
+            else   // 关降水 → OVERLAY 回 gibs(云图开则可见,否则 opacity 0)
+            {
+                if (pcptr) pcptr->setEnabled(false);
+                osgVerse::TileManager::instance()->setLayerPath(osgVerse::TileCallback::OVERLAY, "gibs");
+            }
+            applyOverlayOpacity();
+        };
+        layerMgr.add(precipL);
 
         OverlayLayer quakes; quakes.id = "quakes"; quakes.displayName = u8"地震 (USGS)";
         quakes.group = u8"实时数据 / Live"; quakes.enabled = false; quakes.hasOpacity = false;
@@ -471,6 +506,13 @@ int main(int argc, char** argv)
         const char* qkEnv = getenv("EARTH_QUAKES");
         if (qkEnv && *qkEnv) qk->enabled = (atoi(qkEnv) != 0);
         layerMgr.setEnabled("quakes", qk->enabled);
+    }
+    if (OverlayLayer* pp = layerMgr.find("precip"))
+    {
+        // EARTH_PRECIP=1 强制开启降水层(headless 验证用;与 EARTH_CLOUDS 互斥,后开者生效)。
+        const char* pEnv = getenv("EARTH_PRECIP");
+        if (pEnv && *pEnv) pp->enabled = (atoi(pEnv) != 0);
+        layerMgr.setEnabled("precip", pp->enabled);
     }
 
     // ImGui 控制面板 — 挂到最终 HUD 相机（cameras[3]），确保在地球图像之上绘制
