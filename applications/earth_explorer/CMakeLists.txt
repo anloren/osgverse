@@ -1,8 +1,10 @@
 SET(EXE_NAME osgVerse_EarthExplorer)
 SET(EXECUTABLE_FILES
     earth_main.cpp ui.cpp render_effects.cpp
-    city_data.cpp ReaderWriterCSV.cpp
+    city_data.cpp ReaderWriterCSV.cpp quake_data.cpp
 )
+ADD_DEFINITIONS(-DHV_STATICLIB)
+INCLUDE_DIRECTORIES(../../3rdparty/libhv ../../3rdparty/libhv/all)
 
 NEW_EXECUTABLE(${EXE_NAME} SHARED)
 SET_PROPERTY(TARGET ${EXE_NAME} PROPERTY FOLDER "APPLICATIONS")

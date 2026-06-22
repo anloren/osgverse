@@ -19,6 +19,7 @@
 #include <pipeline/Pipeline.h>
 #include "EarthControlUI.h"
 #include "LayerManager.h"
+#include "quake_data.h"
 #include <VerseCommon.h>
 #include <iostream>
 #include <sstream>
@@ -349,6 +350,9 @@ int main(int argc, char** argv)
     sceneCamera->setSmallFeatureCullingPixelSize(10.0f);
     sceneCamera->addChild(configureCityData(
         viewer, earthRoot.get(), earthRenderingUtils, mainFolder, EARTH_INTERSECTION_MASK, cityWaitingTiles));
+
+    QuakeLayer* quakeLayer = nullptr;
+    sceneCamera->addChild(configureQuakeData(viewer, earthRoot.get(), mainFolder, &quakeLayer));
 
     osg::ref_ptr<osg::Group> root = new osg::Group;
     root->addChild(earthRoot.get());
