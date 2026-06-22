@@ -20,6 +20,7 @@
 #include "EarthControlUI.h"
 #include "LayerManager.h"
 #include "quake_data.h"
+#include "precip_data.h"
 #include <VerseCommon.h>
 #include <iostream>
 #include <sstream>
@@ -226,11 +227,21 @@ static std::string createCustomPath(int type, const std::string& prefix, int x, 
     }
     else if (type == osgVerse::TileCallback::OVERLAY)
     {
+        // OVERLAY 槽按 prefix(= 该层路径,由 TileManager::setLayerPath 设)分流:
+        //   "gibs"      → GIBS VIIRS 云图(默认);
+        //   以 http 开头 → 当作完整瓦片模板(RainViewer 降水雷达);
+        //   其它(空)    → 不加载(返回空)。
+        if (prefix.rfind("http", 0) == 0)   // RainViewer 模板(已含 {z}/{x}/{y})
+        {
+            if (z > 10) return "";          // 雷达分辨率粗,z>10 不取
+            return osgVerse::TileCallback::createPath(prefix, x, yXYZ, z);
+        }
+        if (prefix != "gibs") return "";    // 空/未知 → 不加载叠加瓦片
+
         if (z > 9) return "";  // GIBS GoogleMapsCompatible_Level9 max zoom is 9; no data above
-        // 用 VIIRS_SNPP 真彩而非 MODIS_Terra：MODIS 单星刈幅 2330km < 赤道轨道间距，每日真彩在赤道
-        // 留一排黑色刈幅空隙（贴到球上=黑色尖楔）；VIIRS 刈幅 3060km 在赤道搭接 → 每日真彩无缝。
-        // 仍取「今天-2 天」(UTC) 的完整日期，只算一次（长时间运行不刷新；跨 UTC 午夜需重启刷新）。
-        // 南极极夜瓦片 VIIRS 返回 404 → 加载失败回退默认透明贴图（露底图）而非黑斑。
+        // 用 VIIRS_SNPP 真彩而非 MODIS_Terra:MODIS 单星刈幅赤道留黑色刈幅空隙;VIIRS 无缝。
+        // 取「今天-2 天」(UTC) 完整日期,只算一次(长跑不刷新;跨 UTC 午夜需重启)。
+        // 南极极夜瓦片 VIIRS 返回 404 → 加载失败回退默认透明贴图(露底图)而非黑斑,无需特殊处理。
         static const std::string gibsDate = []() {
             time_t t = time(NULL) - 2 * 86400; struct tm g; gmtime_r(&t, &g);
             char buf[16]; strftime(buf, sizeof(buf), "%Y-%m-%d", &g); return std::string(buf);
@@ -353,6 +364,8 @@ int main(int argc, char** argv)
 
     QuakeLayer* quakeLayer = nullptr;
     sceneCamera->addChild(configureQuakeData(viewer, earthRoot.get(), mainFolder, &quakeLayer));
+
+    osg::ref_ptr<PrecipController> precip = configurePrecipLayer();
 
     osg::ref_ptr<osg::Group> root = new osg::Group;
     root->addChild(earthRoot.get());
