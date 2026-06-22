@@ -8,7 +8,10 @@
 #include "3rdparty/libhv/all/client/requests.h"
 #include <OpenThreads/Thread>
 #include <OpenThreads/Mutex>
-#include <osgDB/Options>
+#include <atomic>
+#include <osgViewer/View>
+#include <osgGA/GUIEventHandler>
+#include <osgDB/Options>            // 必需:TileCallback.h 有 ref_ptr<osgDB::Options> 成员,需完整类型,勿删
 #include <readerwriter/TileCallback.h>
 #include "precip_data.h"
 
@@ -81,16 +84,14 @@ namespace
     class PrecipControllerImpl : public PrecipController
     {
     public:
-        PrecipControllerImpl() : _enabled(false), _refreshNow(false), _thread(nullptr) {}
+        PrecipControllerImpl() : _enabled(false), _refreshNow(false), _pendingDirty(false), _thread(nullptr) {}
         virtual void setEnabled(bool on) { _enabled = on; if (on) _refreshNow = true; }
         virtual bool isEnabled() const { return _enabled; }
-
-        // 后台线程取用:开启瞬间需立即抓一次。
-        bool takeRefreshNow() { bool r = _refreshNow; _refreshNow = false; return r; }
-
+        bool takeRefreshNow() { return _refreshNow.exchange(false); }
         void startFetch() { if (!_thread) { _thread = new FetchThread(this); _thread->startThread(); } }
 
-        // 后台线程调用:抓最新帧,若变化且仍开启则设 OVERLAY 路径(check() 会重载瓦片)。
+        // 后台线程:抓帧;变化则把模板交给主线程。worker 不直接动 TileManager
+        // ——TileManager::_layerPaths 无锁,主/cull 线程每帧 check() 读它,worker 写会数据竞争。
         void refreshIfEnabled()
         {
             if (!_enabled) return;
@@ -99,16 +100,39 @@ namespace
             if (tmpl != _lastTemplate)
             {
                 _lastTemplate = tmpl;
-                osgVerse::TileManager::instance()->setLayerPath(osgVerse::TileCallback::OVERLAY, tmpl);
-                std::cout << "[Precip] OVERLAY set to RainViewer frame\n";
+                OpenThreads::ScopedLock<OpenThreads::Mutex> lk(_mutex);
+                _pendingTemplate = tmpl; _pendingDirty = true;
             }
+        }
+
+        // 主线程(FRAME 事件)调用:把待定模板设进 OVERLAY 槽(TileManager 仅主线程访问,安全)。
+        void applyPending()
+        {
+            std::string tmpl;
+            { OpenThreads::ScopedLock<OpenThreads::Mutex> lk(_mutex);
+              if (!_pendingDirty) return; tmpl = _pendingTemplate; _pendingDirty = false; }
+            osgVerse::TileManager::instance()->setLayerPath(osgVerse::TileCallback::OVERLAY, tmpl);
+            std::cout << "[Precip] OVERLAY set to RainViewer frame\n";
         }
     protected:
         virtual ~PrecipControllerImpl()
         { if (_thread) { _thread->cancel(); _thread->join(); delete _thread; _thread = nullptr; } }
-        bool _enabled, _refreshNow;
-        std::string _lastTemplate;
+        std::atomic<bool> _enabled, _refreshNow;   // 跨线程(主写、worker 读)→ atomic
+        bool _pendingDirty;                         // 仅 _mutex 内访问
+        std::string _lastTemplate, _pendingTemplate;
+        OpenThreads::Mutex _mutex;
         FetchThread* _thread;
+    };
+
+    // 主线程 FRAME:把后台抓到的待定模板应用到 OVERLAY 槽(确保 setLayerPath 在主线程)。
+    class PrecipApplyHandler : public osgGA::GUIEventHandler
+    {
+    public:
+        PrecipApplyHandler(PrecipControllerImpl* c) : _ctrl(c) {}
+        virtual bool handle(const osgGA::GUIEventAdapter& ea, osgGA::GUIActionAdapter&)
+        { if (ea.getEventType() == osgGA::GUIEventAdapter::FRAME) _ctrl->applyPending(); return false; }
+    protected:
+        osg::ref_ptr<PrecipControllerImpl> _ctrl;
     };
 
     void FetchThread::run()
@@ -129,11 +153,12 @@ namespace
     }
 }
 
-osg::ref_ptr<PrecipController> configurePrecipLayer()
+osg::ref_ptr<PrecipController> configurePrecipLayer(osgViewer::View& viewer)
 {
     osg::ref_ptr<PrecipControllerImpl> c(new PrecipControllerImpl);
     c->startFetch();   // 线程常驻;仅 isEnabled() 时联网
-    // 临时(Task 4 删,改由图层 apply 驱动):env 强制开,供本任务 headless 验证。
+    viewer.addEventHandler(new PrecipApplyHandler(c.get()));   // 主线程应用待定模板
+    // 临时(Task 4 删,改由图层 apply 驱动):env 强制开,供 headless 验证。
     if (getenv("EARTH_PRECIP_FILE") || getenv("EARTH_PRECIP")) c->setEnabled(true);
-    return osg::ref_ptr<PrecipController>(c.get());
+    return c;   // ref_ptr<PrecipControllerImpl> → ref_ptr<PrecipController> 隐式上转
 }

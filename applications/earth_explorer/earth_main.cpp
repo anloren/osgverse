@@ -365,7 +365,7 @@ int main(int argc, char** argv)
     QuakeLayer* quakeLayer = nullptr;
     sceneCamera->addChild(configureQuakeData(viewer, earthRoot.get(), mainFolder, &quakeLayer));
 
-    osg::ref_ptr<PrecipController> precip = configurePrecipLayer();
+    osg::ref_ptr<PrecipController> precip = configurePrecipLayer(viewer);
 
     osg::ref_ptr<osg::Group> root = new osg::Group;
     root->addChild(earthRoot.get());
