@@ -1,0 +1,20 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": { "mag": 6.2, "place": "Shallow Test near Tokyo", "time": 1718900000000, "url": "https://earthquake.usgs.gov/eq1" },
+      "geometry": { "type": "Point", "coordinates": [139.69, 35.69, 10.0] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "mag": 4.8, "place": "Mid Test near Lima", "time": 1718890000000, "url": "https://earthquake.usgs.gov/eq2" },
+      "geometry": { "type": "Point", "coordinates": [-77.04, -12.05, 150.0] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "mag": 3.1, "place": "Deep Test near Fiji", "time": 1718880000000, "url": "https://earthquake.usgs.gov/eq3" },
+      "geometry": { "type": "Point", "coordinates": [178.0, -17.7, 550.0] }
+    }
+  ]
+}
