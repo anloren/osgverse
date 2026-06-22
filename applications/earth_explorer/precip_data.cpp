@@ -92,12 +92,14 @@ namespace
 
         // 后台线程:抓帧;变化则把模板交给主线程。worker 不直接动 TileManager
         // ——TileManager::_layerPaths 无锁,主/cull 线程每帧 check() 读它,worker 写会数据竞争。
-        void refreshIfEnabled()
+        // force=true(刚开启):绕过 _lastTemplate 去重,强制重设 OVERLAY 路径。否则切到云图(OVERLAY
+        // 被设为 gibs)再切回降水、且雷达帧未变时,tmpl==_lastTemplate 会误跳过 → 降水不再出现。
+        void refreshIfEnabled(bool force)
         {
             if (!_enabled) return;
             std::string tmpl = fetchRainViewerTemplate();
             if (tmpl.empty() || !_enabled) return;   // 抓取期间可能被关
-            if (tmpl != _lastTemplate)
+            if (force || tmpl != _lastTemplate)
             {
                 _lastTemplate = tmpl;
                 OpenThreads::ScopedLock<OpenThreads::Mutex> lk(_mutex);
@@ -143,7 +145,8 @@ namespace
         {
             if (_owner->isEnabled())
             {
-                if (_owner->takeRefreshNow() || tick <= 0) { _owner->refreshIfEnabled(); tick = kIntervalTicks; }
+                bool force = _owner->takeRefreshNow();   // 刚开启 → 强制重设(绕过去重)
+                if (force || tick <= 0) { _owner->refreshIfEnabled(force); tick = kIntervalTicks; }
                 else tick--;
             }
             else tick = 0;
