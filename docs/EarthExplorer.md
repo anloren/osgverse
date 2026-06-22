@@ -45,7 +45,7 @@ open /Users/franklee/osgverse/dist/EarthExplorer.app
 - **渲染选项**：海洋 (Ocean) 开关、曝光系数 (Exposure) 滑动条。
 - **跳转经纬度 (Go To)**：输入目标 Lat / Lon，点击 Go 立即飞向该位置。
 - **书签巡游 (Bookmarks)**：预存若干地标，支持单步跳转或自动巡游。
-- **图层 (Layers)**：卫星影像、路网·地名、GIBS 影像/云图，以及「实时数据 / Live」分组下的 **地震 (USGS)** 开关。
+- **图层 (Layers)**：卫星影像、路网·地名、「影像 / 天气」分组下二选一的 **GIBS 影像/云图** 与 **降水雷达 RainViewer**，以及「实时数据 / Live」分组下的 **地震 (USGS)** 开关。
 
 ## 鼠标操作
 
@@ -106,3 +106,18 @@ EARTH_TILE_CACHE=/Volumes/SSD/earth_cache packaging/run.sh
 | `EARTH_QUAKES=1` | 启动即强制开启地震图层（无界面验证用） |
 | `EARTH_QUAKES_FILE=<路径>` | 用本地 GeoJSON 文件替代联网抓取（离线/确定性测试用） |
 | `EARTH_QUAKE_PICKDBG=1` | 场景稳定后跑一次拾取自测，打印各点投影坐标与自拾取结果（headless 调试拾取链路用） |
+
+## 实时降水雷达 (RainViewer)
+
+面板 **图层 Layers → 影像 / 天气** 分组中有 **降水雷达 RainViewer** 复选框（默认关闭）。
+
+- **勾选后**：后台从 [RainViewer](https://www.rainviewer.com/api.html)（免费、无需 API key）拉取最新一帧全球降水雷达，叠加在地球上，并**每约 8 分钟自动刷新**（仅图层开启时联网）。色块按降水强度着色，无降水/无雷达覆盖处透明。
+- **与「GIBS 影像/云图」二选一**：两者共用同一个叠加层槽位，勾选其一会自动取消另一个。
+- **注意**：RainViewer 以陆基雷达为主，海洋及无雷达地区无数据（透明属正常）。
+
+测试/脚本环境变量（普通使用无需设置）：
+
+| 变量 | 作用 |
+|------|------|
+| `EARTH_PRECIP=1` | 启动即强制开启降水雷达图层（无界面验证用） |
+| `EARTH_PRECIP_FILE=<路径>` | 用本地 weather-maps.json 替代联网抓取（离线/确定性测试用） |

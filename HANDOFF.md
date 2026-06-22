@@ -4,7 +4,21 @@
 > 用户主语言中文，请用中文回复。macOS / Apple Silicon。
 
 ---
-## ✅ 2026-06-22 会话 — 实时地震图层接入（最新，先读这个）
+## ✅ 2026-06-23 会话 — 降水雷达图层 RainViewer（最新，先读这个）
+
+接入**第二个实时数据流**:RainViewer 降水雷达(原计划"地震+降水"的 Step 2,补齐)。**复用 GIBS 云图的 OVERLAY 槽、与云图二选一、零着色器改动**。4 任务提交(子代理驱动 + 每任务双审,含一处线程安全修复),**待用户真机交互确认后 push**。`dist/EarthExplorer.app` 已重打包(打包二进制验证通过)。
+
+- **OVERLAY 槽按 prefix 分流**(`earth_main.cpp` createCustomPath):`"gibs"`→GIBS / 以 `http` 开头→RainViewer 模板(z>10 不取)/ 空→不加载。默认仍 `"gibs"`,行为不变。
+- 数据:`weather-maps.json`(无 key)→ `host`+`radar.past` 末项 `path` → 模板 `{host}{path}/256/{z}/{x}/{y}/4/1_1.png`(256px **RGBA**,无降水处透明)。已 curl 验证。
+- 新模块 `precip_data.{h,cpp}`:`PrecipController`(osg::Referenced)+ 后台 `FetchThread`(~8min,仅开启时联网,15s 超时)。**worker 不直接动 TileManager**(`_layerPaths` 无锁、主/cull 线程每帧 `check()` 读)——worker 经 mutex 交模板,**主线程 FRAME handler `applyPending` 调 `TileManager::setLayerPath(OVERLAY, 模板)`**;per-tile `check()` 自动重载(city_data 切 USER 层同款)。`_enabled`/`_refreshNow` 用 `std::atomic<bool>`。
+- 互斥 + UI:「影像 / 天气」组两个互斥复选框「GIBS 影像/云图」+「降水雷达 RainViewer」。apply 用**直接写对方 `enabled` 字段**(不调 `setEnabled`)避免递归;`Overlay2Opacity` 由 `applyOverlayOpacity` 统一算(降水>云图>0)。
+- 钩子:`EARTH_PRECIP=1`(强制开)、`EARTH_PRECIP_FILE=<weather-maps.json>`(离线样本)。
+- 关键坑(已记):①`<readerwriter/TileCallback.h>` 独立编译需先 `#include <osgDB/Options>`(有 `ref_ptr<osgDB::Options>` 成员);② worker→TileManager 数据竞争(已用主线程 handler 修)。详见 [[earth-precip-layer-done]]。
+- headless 验证:欧洲实时降水雷达可见、晨昏线/海洋无橙、默认关零抓取。**真机待确认:开关互斥、~8min 刷新**。
+- 计划/设计:`docs/superpowers/plans/2026-06-23-earth-precip-layer.md`、spec 的 Step 2 段。
+
+---
+## ✅ 2026-06-22 会话 — 实时地震图层接入
 
 接入**第一个真·实时全球数据流**：USGS 地震叠加层。**5 个任务提交**(子代理驱动 + 每任务双重审查 + 整体终审,均 headless 验证),**待用户真机交互确认后 push**。`dist/EarthExplorer.app` 已用最新二进制重打包(打包二进制 headless 跑通)。
 
