@@ -568,7 +568,9 @@ bool TileCallback::updateLayerData(osg::NodeVisitor* nv, osg::Node* node, LayerT
     case OCEAN_MASK:
         tex = createLayerImage(id, emptyPath, opt); texUnit = 1; break;
     case OVERLAY:
-        tex = createLayerImage(id, emptyPath, opt); texUnit = 3; break;
+        // OVERLAY 路径可在运行时切换(降水/云图二选一),check() 会在主线程 update 回调里触发重载。
+        // 用 ImageRequestHandler(场景自带的 ImagePager)异步加载,避免主线程同步拉网络瓦片导致整屏卡顿。
+        tex = createLayerImage(id, emptyPath, opt, nv ? nv->getImageRequestHandler() : NULL); texUnit = 3; break;
     default:  // USER
         // FIXME: use own ImageRequestHandler if we need to check and reuse parent tile...
         //tex = createLayerImage(id, emptyPath, nv->getImageRequestHandler()); texUnit = 2; break;
