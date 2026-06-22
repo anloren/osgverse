@@ -85,7 +85,11 @@ namespace
             std::cout << "[Quake] Parsed " << qs.size() << " quakes (fixture)\n";
             return qs;
         }
-        auto resp = requests::get(kQuakeFeedUrl);
+        requests::Request req(new HttpRequest);
+        req->method = HTTP_GET;
+        req->url = kQuakeFeedUrl;
+        req->timeout = 15;   // 秒:界定退出时后台线程 join() 的最坏等待
+        requests::Response resp = requests::request(req);
         if (!resp || resp->status_code != 200)
         {
             std::cout << "[Quake] fetch failed, status="
@@ -185,13 +189,26 @@ namespace
         QuakeLayerImpl* _owner;
     };
 
+    // 抓取线程:仅图层开启时每 ~60s 拉一次(分片 sleep 便于秒退)。不碰 GL/场景图。
+    class FetchThread : public OpenThreads::Thread
+    {
+    public:
+        FetchThread(QuakeLayerImpl* o) : _owner(o), _done(false) {}
+        virtual int cancel() { _done = true; return OpenThreads::Thread::cancel(); }
+        virtual void run();   // 定义在 QuakeLayerImpl 之后(需其完整定义)
+    protected:
+        QuakeLayerImpl* _owner; bool _done;
+    };
+
     // 内部具体类。返回的 Group 经 setUserData 持有本对象;
     // 本对象用裸指针引用 Group(不拥有它),避免引用环。
     class QuakeLayerImpl : public osg::Referenced, public QuakeLayer
     {
     public:
-        QuakeLayerImpl() : _root(nullptr), _enabled(false), _dirty(false) {}
+        QuakeLayerImpl() : _root(nullptr), _enabled(false), _dirty(false), _thread(nullptr) {}
         virtual void setEnabled(bool on) { _enabled = on; if (_root) _root->setNodeMask(on ? ~0u : 0u); }
+
+        void startFetch() { if (!_thread) { _thread = new FetchThread(this); _thread->startThread(); } }
         virtual bool isEnabled() const { return _enabled; }
         virtual QuakeInfo getSelected() const { return QuakeInfo(); }
         virtual void clearSelected() {}
@@ -238,16 +255,37 @@ namespace
             return _root;
         }
     protected:
+        virtual ~QuakeLayerImpl()
+        { if (_thread) { _thread->cancel(); _thread->join(); delete _thread; _thread = nullptr; } }
+
         osg::Group* _root;   // 裸指针:由返回节点经 UserData 拥有
         osg::ref_ptr<osg::Geode> _geode;
         osg::ref_ptr<osg::StateSet> _ss;
         std::vector<Quake> _quakes, _pending;
         OpenThreads::Mutex _mutex;
         bool _enabled, _dirty;
+        FetchThread* _thread;
     };
 
     void SyncCallback::operator()(osg::Node* node, osg::NodeVisitor* nv)
     { _owner->syncIfDirty(); traverse(node, nv); }
+
+    void FetchThread::run()
+    {
+        const int kIntervalTicks = 600;   // 60s ÷ 100ms/tick
+        int tick = 0;
+        while (!_done)
+        {
+            if (_owner->isEnabled())
+            {
+                if (tick <= 0) { _owner->postSnapshot(fetchQuakes()); tick = kIntervalTicks; }
+                else tick--;
+            }
+            else tick = 0;   // 关闭时,下次开启立即抓
+            OpenThreads::Thread::microSleep(100000);  // 100ms
+        }
+        _done = true;
+    }
 }
 
 osg::Node* configureQuakeData(osgViewer::View& viewer, osg::Node* earthRoot,
@@ -257,8 +295,6 @@ osg::Node* configureQuakeData(osgViewer::View& viewer, osg::Node* earthRoot,
     osg::Group* root = impl->buildScene();
     root->setUserData(impl.get());
     if (outLayer) *outLayer = impl.get();
-
-    impl->postSnapshot(fetchQuakes());   // 临时:直接取一次(Task 4 改后台线程)
-    impl->setEnabled(true);              // 临时:强制开,便于截图(Task 4 改回默认关)
+    impl->startFetch();   // 线程常驻;仅 isEnabled() 时才真正联网
     return root;
 }

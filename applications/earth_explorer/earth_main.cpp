@@ -428,6 +428,12 @@ int main(int argc, char** argv)
                 eptr->commonUniforms["Overlay2Opacity"]->set(v);
         };
         layerMgr.add(clouds);
+
+        OverlayLayer quakes; quakes.id = "quakes"; quakes.displayName = u8"地震 (USGS)";
+        quakes.group = u8"实时数据 / Live"; quakes.enabled = false; quakes.hasOpacity = false;
+        QuakeLayer* qptr = quakeLayer;
+        quakes.apply = [qptr](const OverlayLayer& l) { if (qptr) qptr->setEnabled(l.enabled); };
+        layerMgr.add(quakes);
     }
     // 同步初始状态到 uniform（apply 只在交互时触发，这里推一次初值）
     if (OverlayLayer* lbl = layerMgr.find("labels"))
@@ -444,6 +450,14 @@ int main(int argc, char** argv)
             cl->opacity = (op < 0.0f) ? 0.0f : (op > 1.0f ? 1.0f : op);
         }
         layerMgr.setEnabled("clouds", cl->enabled);  // default off → Overlay2Opacity stays 0
+    }
+    if (OverlayLayer* qk = layerMgr.find("quakes"))
+    {
+        // EARTH_QUAKES=<非0> 强制开启地震层(headless 验证用)。类似 EARTH_CLOUDS,
+        // 但本层无不透明度,取值仅作 0/1 开关。
+        const char* qkEnv = getenv("EARTH_QUAKES");
+        if (qkEnv && *qkEnv) qk->enabled = (atoi(qkEnv) != 0);
+        layerMgr.setEnabled("quakes", qk->enabled);
     }
 
     // ImGui 控制面板 — 挂到最终 HUD 相机（cameras[3]），确保在地球图像之上绘制
