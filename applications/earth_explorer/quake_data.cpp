@@ -1,6 +1,7 @@
 #include <osg/Geometry>
 #include <osg/Geode>
 #include <osg/Point>
+#include <osg/NodeCallback>
 #include <osgDB/FileUtils>
 #include <osgGA/GUIEventHandler>
 #include <OpenThreads/Thread>
@@ -96,12 +97,100 @@ namespace
         return qs;
     }
 
-    // 内部具体类(后续任务逐步填充)。返回的 Group 经 setUserData 持有本对象;
+    // 点精灵:VS 写 gl_PointSize(取自 texcoord0.x),FS 画圆盘、圆外 discard。
+    // 独立 shader(非 globe 着色器),不接大气散射 → 标记昼夜两侧都清晰可读。
+    // MRT 双输出(COLOR_BUFFER0 颜色 + COLOR_BUFFER1 掩码),同 city_data。
+    const char* quakeVertCode = {
+        "VERSE_VS_OUT vec4 pointColor;\n"
+        "void main() {\n"
+        "    pointColor = osg_Color;\n"
+        "    gl_PointSize = osg_MultiTexCoord0.x;\n"
+        "    gl_Position = VERSE_MATRIX_MVP * osg_Vertex;\n"
+        "}\n"
+    };
+    const char* quakeFragCode = {
+        "VERSE_FS_IN vec4 pointColor;\n"
+        "#ifdef VERSE_GLES3\n"
+        "layout(location = 0) VERSE_FS_OUT vec4 fragColor;\n"
+        "layout(location = 1) VERSE_FS_OUT vec4 fragOrigin;\n"
+        "#endif\n"
+        "void main() {\n"
+        "    vec2 d = gl_PointCoord - vec2(0.5);\n"
+        "    float r2 = dot(d, d);\n"
+        "    if (r2 > 0.25) discard;\n"
+        "    float edge = 1.0 - smoothstep(0.16, 0.25, r2);\n"
+        "    vec3 rgb = mix(pointColor.rgb * 0.7, pointColor.rgb, edge);\n"
+        "#ifdef VERSE_GLES3\n"
+        "    fragColor = vec4(rgb, 1.0); fragOrigin = vec4(1.0);\n"
+        "#else\n"
+        "    gl_FragData[0] = vec4(rgb, 1.0); gl_FragData[1] = vec4(1.0);\n"
+        "#endif\n"
+        "}\n"
+    };
+
+    // 深度→颜色(USGS 习惯:浅红 → 中橙黄 → 深蓝)。
+    osg::Vec4 depthColor(double depthKm)
+    {
+        if (depthKm < 70.0)  return osg::Vec4(0.90f, 0.18f, 0.15f, 1.0f);   // 浅:红
+        if (depthKm < 300.0) return osg::Vec4(0.98f, 0.66f, 0.12f, 1.0f);   // 中:橙黄
+        return osg::Vec4(0.20f, 0.45f, 0.95f, 1.0f);                        // 深:蓝
+    }
+
+    // 震级→屏幕点像素大小。
+    float magSizePx(double mag)
+    {
+        float s = 4.0f + (float)(mag - 2.5) * 3.0f;
+        return s < 4.0f ? 4.0f : (s > 28.0f ? 28.0f : s);
+    }
+
+#ifndef GL_PROGRAM_POINT_SIZE
+#define GL_PROGRAM_POINT_SIZE 0x8642
+#endif
+
+    // 由一批 Quake 构建一个 Geode(GL_POINTS)。
+    osg::Geode* buildQuakeGeode(const std::vector<Quake>& qs, osg::StateSet* sharedSS)
+    {
+        osg::ref_ptr<osg::Geometry> geom = new osg::Geometry;
+        osg::ref_ptr<osg::Vec3Array> verts = new osg::Vec3Array;
+        osg::ref_ptr<osg::Vec4Array> colors = new osg::Vec4Array;
+        osg::ref_ptr<osg::Vec2Array> sizes = new osg::Vec2Array;  // .x = 点像素大小
+        for (size_t i = 0; i < qs.size(); ++i)
+        {
+            verts->push_back(qs[i].ecef);
+            colors->push_back(depthColor(qs[i].depthKm));
+            sizes->push_back(osg::Vec2(magSizePx(qs[i].mag), 0.0f));
+        }
+        geom->setVertexArray(verts.get());
+        geom->setColorArray(colors.get(), osg::Array::BIND_PER_VERTEX);
+        geom->setTexCoordArray(0, sizes.get());
+        geom->addPrimitiveSet(new osg::DrawArrays(GL_POINTS, 0, (GLsizei)verts->size()));
+        geom->setUseDisplayList(false); geom->setUseVertexBufferObjects(true);
+        geom->setCullingActive(false);
+
+        osg::ref_ptr<osg::Geode> geode = new osg::Geode;
+        geode->addDrawable(geom.get());
+        geode->setStateSet(sharedSS);
+        return geode.release();
+    }
+
+    // 前向声明
+    class QuakeLayerImpl;
+
+    class SyncCallback : public osg::NodeCallback
+    {
+    public:
+        SyncCallback(QuakeLayerImpl* o) : _owner(o) {}
+        virtual void operator()(osg::Node* node, osg::NodeVisitor* nv);  // 仅声明,定义在 QuakeLayerImpl 之后
+    protected:
+        QuakeLayerImpl* _owner;
+    };
+
+    // 内部具体类。返回的 Group 经 setUserData 持有本对象;
     // 本对象用裸指针引用 Group(不拥有它),避免引用环。
     class QuakeLayerImpl : public osg::Referenced, public QuakeLayer
     {
     public:
-        QuakeLayerImpl() : _root(nullptr), _enabled(false) {}
+        QuakeLayerImpl() : _root(nullptr), _enabled(false), _dirty(false) {}
         virtual void setEnabled(bool on) { _enabled = on; if (_root) _root->setNodeMask(on ? ~0u : 0u); }
         virtual bool isEnabled() const { return _enabled; }
         virtual QuakeInfo getSelected() const { return QuakeInfo(); }
@@ -109,21 +198,56 @@ namespace
 
         osg::Group* root() { return _root; }
 
-        // 创建并返回场景根(调用方负责持有/拥有它)。
+        // 后台线程交付新快照(加锁)。
+        void postSnapshot(const std::vector<Quake>& qs)
+        { OpenThreads::ScopedLock<OpenThreads::Mutex> lk(_mutex); _pending = qs; _dirty = true; }
+
+        // 主线程(update 遍历)调用:若有新数据则重建 geode。
+        void syncIfDirty()
+        {
+            std::vector<Quake> qs;
+            { OpenThreads::ScopedLock<OpenThreads::Mutex> lk(_mutex);
+              if (!_dirty) return; qs = _pending; _dirty = false; }
+            _quakes = qs;
+            if (_geode.valid()) _root->removeChild(_geode.get());
+            _geode = buildQuakeGeode(qs, _ss.get());
+            _root->addChild(_geode.get());
+        }
+
+        // 仅主线程读(syncIfDirty 在 update 遍历写;Task 5 拾取在事件处理读,同主线程)。
+        const std::vector<Quake>& quakes() const { return _quakes; }
+
         osg::Group* buildScene()
         {
             _root = new osg::Group;
-            _root->setNodeMask(0);
-            std::vector<Quake> qs = fetchQuakes();   // 临时:验证解析(Task 3 移到线程/回调)
-            for (size_t i = 0; i < qs.size(); ++i)
-                std::cout << "[Quake]   M" << qs[i].mag << " depth=" << qs[i].depthKm
-                          << "km " << qs[i].place << "\n";
+            _root->setNodeMask(0);   // 默认关
+
+            osg::Shader* vs = new osg::Shader(osg::Shader::VERTEX, quakeVertCode);
+            osg::Shader* fs = new osg::Shader(osg::Shader::FRAGMENT, quakeFragCode);
+            vs->setName("Quake_VS"); fs->setName("Quake_FS");
+            osgVerse::Pipeline::createShaderDefinitions(vs, 100, 130);
+            osgVerse::Pipeline::createShaderDefinitions(fs, 100, 130);
+            osg::ref_ptr<osg::Program> prog = new osg::Program;
+            prog->addShader(vs); prog->addShader(fs);
+            _ss = new osg::StateSet;
+            _ss->setAttributeAndModes(prog.get(), osg::StateAttribute::ON);
+            _ss->setMode(GL_PROGRAM_POINT_SIZE, osg::StateAttribute::ON);
+            _ss->setRenderBinDetails(11, "RenderBin");  // 在地表/海洋 pass 之后画
+
+            _root->addUpdateCallback(new SyncCallback(this));
             return _root;
         }
     protected:
-        osg::Group* _root;   // 裸指针:由返回节点经 UserData 拥有,本对象不拥有
-        bool _enabled;
+        osg::Group* _root;   // 裸指针:由返回节点经 UserData 拥有
+        osg::ref_ptr<osg::Geode> _geode;
+        osg::ref_ptr<osg::StateSet> _ss;
+        std::vector<Quake> _quakes, _pending;
+        OpenThreads::Mutex _mutex;
+        bool _enabled, _dirty;
     };
+
+    void SyncCallback::operator()(osg::Node* node, osg::NodeVisitor* nv)
+    { _owner->syncIfDirty(); traverse(node, nv); }
 }
 
 osg::Node* configureQuakeData(osgViewer::View& viewer, osg::Node* earthRoot,
@@ -131,7 +255,10 @@ osg::Node* configureQuakeData(osgViewer::View& viewer, osg::Node* earthRoot,
 {
     osg::ref_ptr<QuakeLayerImpl> impl = new QuakeLayerImpl;
     osg::Group* root = impl->buildScene();
-    root->setUserData(impl.get());   // root 拥有 impl(无环:impl 用裸指针引用 root)
+    root->setUserData(impl.get());
     if (outLayer) *outLayer = impl.get();
+
+    impl->postSnapshot(fetchQuakes());   // 临时:直接取一次(Task 4 改后台线程)
+    impl->setEnabled(true);              // 临时:强制开,便于截图(Task 4 改回默认关)
     return root;
 }
