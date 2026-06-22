@@ -45,6 +45,7 @@ open /Users/franklee/osgverse/dist/EarthExplorer.app
 - **渲染选项**：海洋 (Ocean) 开关、曝光系数 (Exposure) 滑动条。
 - **跳转经纬度 (Go To)**：输入目标 Lat / Lon，点击 Go 立即飞向该位置。
 - **书签巡游 (Bookmarks)**：预存若干地标，支持单步跳转或自动巡游。
+- **图层 (Layers)**：卫星影像、路网·地名、GIBS 影像/云图，以及「实时数据 / Live」分组下的 **地震 (USGS)** 开关。
 
 ## 鼠标操作
 
@@ -89,3 +90,18 @@ EARTH_TILE_CACHE=/Volumes/SSD/earth_cache packaging/run.sh
 ## 相机限制
 
 滚轮拉近时相机距地表最低约 **50 米**，无法穿入地下。接近地表时滚轮速度自动减慢以便精细操控。
+
+## 实时地震图层 (USGS)
+
+面板 **图层 Layers → 实时数据 / Live** 分组中有 **地震 (USGS)** 复选框（默认关闭）。
+
+- **勾选后**：后台从 USGS 拉取「过去 24 小时、震级 M2.5+」的全球地震（[2.5_day GeoJSON feed](https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_day.geojson)，免费、无需 API key），在地球上叠加圆点标记，并**每约 60 秒自动刷新**（仅图层开启时联网）。
+- **点的大小** 随**震级**增大，**点的颜色** 随**深度**变化：浅源 (<70km) 红、中源 (70–300km) 橙黄、深源 (>300km) 蓝。
+- **点击某个地震点**：面板弹出「地震详情」卡片，显示震级、深度、位置、经纬、发生时间（相对/UTC）与 USGS 事件链接；点「关闭」收起。
+
+测试/脚本环境变量（普通使用无需设置）：
+
+| 变量 | 作用 |
+|------|------|
+| `EARTH_QUAKES=1` | 启动即强制开启地震图层（无界面验证用） |
+| `EARTH_QUAKES_FILE=<路径>` | 用本地 GeoJSON 文件替代联网抓取（离线/确定性测试用） |

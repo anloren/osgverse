@@ -4,7 +4,22 @@
 > 用户主语言中文，请用中文回复。macOS / Apple Silicon。
 
 ---
-## ✅ 2026-06-21 会话 — 已完成与现状（最新，先读这个）
+## ✅ 2026-06-22 会话 — 实时地震图层接入（最新，先读这个）
+
+接入**第一个真·实时全球数据流**：USGS 地震叠加层。**5 个任务提交**(子代理驱动 + 每任务双重审查 + 整体终审,均 headless 验证),**待用户真机交互确认后 push**。`dist/EarthExplorer.app` 已用最新二进制重打包(打包二进制 headless 跑通)。
+
+- 新模块 `applications/earth_explorer/quake_data.{h,cpp}`(仿 `city_data.cpp`),对外只暴露 `QuakeLayer` 抽象 + `configureQuakeData`。**完全不碰 globe 着色器/太阳/海洋 → 4 类回归零风险**(终审确认 diff 只动 6 个文件,无 `scattering_globe.frag.glsl`/sun/OceanOpaque)。
+- 数据:**USGS `2.5_day.geojson`**(M2.5+、过去24h、无 key、HTTPS),`libhv`(已编进 osgVerseDependency,CMake 加 `-DHV_STATICLIB`+include)后台线程 GET + `picojson` 解析。headless 实测联网拉到 **49 条**真实地震。
+- 渲染:`GL_POINTS` 圆点精灵(独立 shader,MRT 双输出 gl_FragData[0/1],非 globe 着色器),**大小∝震级、颜色∝深度**(浅红/中橙/深蓝),ECEF 抬升 3km、深度测试遮挡背面。
+- 实时:后台 `FetchThread` **每 ~60s** 刷新,**仅图层开启时联网**(关闭空转);`requests` 设 15s 超时界定退出 join。主线程 update 回调重建几何(worker 不碰 GL)。
+- 交互:**点击地震点**(屏幕拾取 + 前半球过滤)→ ImGui「地震详情」卡片(震级/深度/位置/经纬/相对时间/USGS 链接)。
+- UI:面板新增「实时数据 / Live」分组 +「地震 (USGS)」开关(默认关)。测试钩子 `EARTH_QUAKES=1`(强制开)、`EARTH_QUAKES_FILE=<path>`(本地样本离线验证)。
+- 设计/计划文档:`docs/superpowers/specs/2026-06-22-earth-quake-precip-overlays-design.md`、`docs/superpowers/plans/2026-06-22-earth-quake-layer.md`。
+- **下一步 = Step 2 降水**(RainViewer 雷达,复用云图 OVERLAY 槽、二选一、零着色器改动),设计已记入上面 spec。
+- 终审 1 条 minor 备注(非阻塞):`QuakePickHandler`/`EarthControlUI` 持 `QuakeLayerImpl` 裸指针,当前"全随进程退出销毁"生命周期下无害(city_data 同款风格);若日后模块复用需改 observer_ptr。
+
+---
+## ✅ 2026-06-21 会话 — 已完成与现状
 
 本会话在干净 master 上做完一批，**全部已 push `origin/master`（HEAD=`b2377bda`）**。**`dist/EarthExplorer.app` 已重打包为最新**（双击即最新）。
 
