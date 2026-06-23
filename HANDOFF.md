@@ -4,7 +4,21 @@
 > 用户主语言中文，请用中文回复。macOS / Apple Silicon。
 
 ---
-## ✅ 2026-06-23 会话 — 降水雷达图层 RainViewer（最新，先读这个）
+## ✅ 2026-06-23 会话(续)— 消除"补丁状瓦片" + 降水两处修复（最新,先读这个）
+
+**全部本地提交、待用户真机确认后一起 push。** `dist/EarthExplorer.app` 已重打包。
+
+**① 补丁状瓦片修复(`7495299e`)** —— 用户报"全球操作时地球花得像补丁、各瓦片阴影程度不同"。
+- **根因(决定性诊断,非源影像)**:把 globe frag 临时改成纯 `originalGroundColor` 对比 → 补丁消失 → 证明是**渲染着色**:大气散射+HDR 把影像洗灰发雾,且 z3 粗 OCEAN_MASK 派生的太阳着色法线逐瓦片块状跳变。
+- **修法**(`scattering_globe.frag.glsl` + `render_effects.cpp`):`finalColor = mix(spaceColor, clearColor, groundClarity)` —— `spaceColor`=现有大气观感(高空保留)、`clearColor`=原始影像×平滑昼夜(低空清晰、无雾)、`groundClarity`=随相机高度 smoothstep。法线改平滑 `normalize(P)`(删粗 mask 法线扰动=块状根源;真实起伏仍由高程几何体现)。band env 可调 `EARTH_CLARITY_ALTLO/ALTHI`(km,默认 2000/8000)。uniform 加在应用层 globe stateset,**不碰共享管线**。
+- **验证**:低空清晰无补丁、中空平滑过渡、高空太空观感保留、晨昏线平滑、海洋不橙、低空倾斜不穿模、地形起伏在。详见 [[earth-tile-patchwork-fix]]。
+
+**② 降水性能修复(`fd198070`)** —— 开降水后任何操作卡顿。根因:OVERLAY 路径切换触发**主线程同步逐瓦片拉网络**(最多1500个)。修法:`updateLayerData` 的 OVERLAY 改用 `nv->getImageRequestHandler()`(场景自带 ImagePager)异步加载。详见 [[earth-precip-layer-done]]。
+
+**③ 降水切换 bug 修复(`c78b1f59`)** —— 云图↔降水来回切后降水不再出现。根因:`_lastTemplate` 去重跨开关失效。修法:再开启时 `force` 绕过去重。
+
+---
+## ✅ 2026-06-23 会话 — 降水雷达图层 RainViewer
 
 接入**第二个实时数据流**:RainViewer 降水雷达(原计划"地震+降水"的 Step 2,补齐)。**复用 GIBS 云图的 OVERLAY 槽、与云图二选一、零着色器改动**。4 任务提交(子代理驱动 + 每任务双审,含一处线程安全修复),**待用户真机交互确认后 push**。`dist/EarthExplorer.app` 已重打包(打包二进制验证通过)。
 
