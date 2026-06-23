@@ -197,8 +197,38 @@ namespace
             OpenThreads::ScopedLock<OpenThreads::Mutex> lk(_bbMutex);
             _bbLatMin = latMin; _bbLonMin = lonMin; _bbLatMax = latMax; _bbLonMax = lonMax;
         }
-        virtual FlightInfo getSelected() const { return FlightInfo(); }
-        virtual void clearSelected() {}
+        virtual FlightInfo getSelected() const
+        { OpenThreads::ScopedLock<OpenThreads::Mutex> lk(_selMutex); return _selected; }
+        virtual void clearSelected()
+        { OpenThreads::ScopedLock<OpenThreads::Mutex> lk(_selMutex); _selected = FlightInfo(); }
+
+        // 屏幕拾取:相机 + 窗口鼠标坐标(y 向上)。选最近的前半球航班。仅主线程调用。
+        void pickAt(osg::Camera* cam, float mx, float my)
+        {
+            if (!_enabled || _flights.empty() || !cam->getViewport()) return;
+            osg::Vec3d eye, center, up; cam->getViewMatrixAsLookAt(eye, center, up);
+            osg::Matrixd VPW = cam->getViewMatrix() * cam->getProjectionMatrix()
+                             * cam->getViewport()->computeWindowMatrix();
+            double bestD2 = 1e18; int best = -1;
+            for (size_t i = 0; i < _flights.size(); ++i)
+            {
+                const osg::Vec3d& P = _flights[i].ecef;
+                if ((eye * P) <= (P * P)) continue;          // 前半球
+                osg::Vec3d win = P * VPW;
+                double d2 = (win.x()-mx)*(win.x()-mx) + (win.y()-my)*(win.y()-my);
+                float tol = 14.0f;
+                if (d2 < (double)(tol*tol) && d2 < bestD2) { bestD2 = d2; best = (int)i; }
+            }
+            if (best >= 0)
+            {
+                const Flight& f = _flights[best];
+                FlightInfo info; info.valid = true;
+                info.callsign = f.callsign; info.country = f.country;
+                info.lon = f.lon; info.lat = f.lat; info.altM = f.altM;
+                info.velMS = f.velMS; info.headingDeg = osg::RadiansToDegrees(f.headingRad);
+                OpenThreads::ScopedLock<OpenThreads::Mutex> lk(_selMutex); _selected = info;
+            }
+        }
 
         void startFetch() { if (!_thread) { _thread = new FetchThread(this); _thread->startThread(); } }
 
@@ -290,6 +320,8 @@ namespace
         FetchThread* _thread;
         bool _refreshNow;
         double _t0;  // 最近一次快照应用时的 referenceTime,用于插值基准
+        FlightInfo _selected;
+        mutable OpenThreads::Mutex _selMutex;
     };
 
     void SyncCallback::operator()(osg::Node* node, osg::NodeVisitor* nv)
@@ -354,6 +386,43 @@ namespace
     protected:
         FlightLayerImpl* _owner;
     };
+
+    static const float kFlightDragThreshPx2 = 25.0f;   // 5px 拖动阈值的平方
+
+    // 点击拾取处理器:镜像 QuakePickHandler — PUSH 记录坐标,RELEASE 若未拖动则拾取。
+    class FlightPickHandler : public osgGA::GUIEventHandler
+    {
+    public:
+        FlightPickHandler(FlightLayerImpl* o) : _owner(o), _downX(0.0f), _downY(0.0f), _pushed(false) {}
+        virtual bool handle(const osgGA::GUIEventAdapter& ea, osgGA::GUIActionAdapter& aa)
+        {
+            if (ea.getEventType() == osgGA::GUIEventAdapter::PUSH
+                && ea.getButton() == osgGA::GUIEventAdapter::LEFT_MOUSE_BUTTON)
+            { _downX = ea.getX(); _downY = ea.getY(); _pushed = true; }
+            else if (ea.getEventType() == osgGA::GUIEventAdapter::RELEASE
+                     && ea.getButton() == osgGA::GUIEventAdapter::LEFT_MOUSE_BUTTON)
+            {
+                float dx = ea.getX() - _downX, dy = ea.getY() - _downY;
+                if (_pushed && dx * dx + dy * dy < kFlightDragThreshPx2)   // 点击(非拖动)
+                {
+                    osgViewer::View* view = static_cast<osgViewer::View*>(&aa);
+                    osg::Camera* cam = view->getCamera();
+                    const osg::Viewport* vp = cam->getViewport();
+                    if (vp)
+                    {
+                        float my = ea.getY();
+                        if (ea.getMouseYOrientation() == osgGA::GUIEventAdapter::Y_INCREASING_DOWNWARDS)
+                            my = vp->height() - my;
+                        _owner->pickAt(cam, ea.getX(), my);
+                    }
+                }
+                _pushed = false;
+            }
+            return false;   // 不拦截,放行给 manipulator
+        }
+    protected:
+        FlightLayerImpl* _owner; float _downX, _downY; bool _pushed;
+    };
 }
 
 osg::Node* configureFlightLayer(osgViewer::View& viewer, osg::Node* earthRoot,
@@ -365,5 +434,6 @@ osg::Node* configureFlightLayer(osgViewer::View& viewer, osg::Node* earthRoot,
     if (outLayer) *outLayer = impl.get();
     impl->startFetch();   // 线程常驻;仅 isEnabled() 时才真正联网
     viewer.addEventHandler(new FlightBBoxHandler(impl.get()));
+    viewer.addEventHandler(new FlightPickHandler(impl.get()));
     return root;
 }

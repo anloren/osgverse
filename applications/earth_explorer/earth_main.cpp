@@ -538,6 +538,7 @@ int main(int argc, char** argv)
     EarthControlUI* ctrlUI = new EarthControlUI(earthManipulator.get(), &earthRenderingUtils, &viewer);
     ctrlUI->_layers = &layerMgr;
     ctrlUI->_quake = quakeLayer;
+    ctrlUI->_flight = flightLayer;
     imgui->initialize(ctrlUI, false);
     imgui->addToView(&viewer, cameras[3]);  // cameras[3] = finalCamera (HUD, renders to screen)
 

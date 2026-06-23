@@ -14,6 +14,7 @@
 #include <modeling/Math.h>
 #include "LayerManager.h"
 #include "quake_data.h"
+#include "flight_data.h"
 
 // EarthExplorer 的 ImGui 控制面板。直接驱动 EarthManipulator 与 EarthAtmosphereOcean，
 // 不经 USER 事件中转。
@@ -24,6 +25,7 @@ struct EarthControlUI : public osgVerse::ImGuiContentHandler
     osgViewer::Viewer* _viewer;                      // 用于退出程序
     LayerManager* _layers = nullptr;   // 由 main 注入
     QuakeLayer* _quake = nullptr;      // 由 main 注入
+    FlightLayer* _flight = nullptr;    // 由 main 注入
     float _sunAz, _sunEl;     // 太阳方位角/高度角（度）
     float _exposure;          // HDR 曝光
     bool  _exposureAuto;      // 自适应曝光(随高度):低空高曝光、高空低曝光
@@ -245,6 +247,29 @@ struct EarthControlUI : public osgVerse::ImGuiContentHandler
                 }
                 ImGui::End();
                 if (!open) _quake->clearSelected();  // 点标题栏 [x] 关闭 → 清除选中
+            }
+        }
+        if (_flight)
+        {
+            FlightInfo fi = _flight->getSelected();
+            if (fi.valid)
+            {
+                ImGuiIO& io = ImGui::GetIO();
+                ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 20.0f, 160.0f),
+                                        ImGuiCond_Always, ImVec2(1.0f, 0.0f));  // 右上角,叠在地震卡下方
+                bool open = true;
+                if (ImGui::Begin(u8"航班详情 Flight", &open,
+                                 ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse))
+                {
+                    ImGui::Text(u8"呼号 Callsign: %s", fi.callsign.c_str());
+                    ImGui::Text(u8"国家 Country: %s", fi.country.c_str());
+                    ImGui::Text(u8"高度 Alt: %.1f km", fi.altM / 1000.0);
+                    ImGui::Text(u8"速度 Speed: %.0f km/h", fi.velMS * 3.6);
+                    ImGui::Text(u8"航向 Heading: %.0f°", fi.headingDeg);
+                    ImGui::Text(u8"经纬 LatLon: %.3f, %.3f", fi.lat, fi.lon);
+                }
+                ImGui::End();
+                if (!open) _flight->clearSelected();  // 点标题栏 [x] 关闭 → 清除选中
             }
         }
         if (font) ImGui::PopFont();
