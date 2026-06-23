@@ -94,6 +94,17 @@ std::vector<osg::Camera*> configureEarthRendering(
     earthRenderingUtils.applyToGlobe(earthCamera->getOrCreateStateSet(), defBase, defTex0, defTex1,
         osgDB::readShaderFile(osg::Shader::VERTEX, SHADER_DIR + "scattering_globe.vert.glsl"),
         osgDB::readShaderFile(osg::Shader::FRAGMENT, SHADER_DIR + "scattering_globe.frag.glsl"));
+    // 地表清晰度高度 band(消"补丁"):相机高度 < AltLo → 完全清晰影像;> AltHi → 完全太空大气观感。
+    // env EARTH_CLARITY_ALTLO / EARTH_CLARITY_ALTHI(km)可调,默认 2000 / 8000 km。
+    {
+        const char* loEnv = getenv("EARTH_CLARITY_ALTLO");
+        const char* hiEnv = getenv("EARTH_CLARITY_ALTHI");
+        float altLo = (loEnv && *loEnv) ? (float)atof(loEnv) * 1000.0f : 2000000.0f;
+        float altHi = (hiEnv && *hiEnv) ? (float)atof(hiEnv) * 1000.0f : 8000000.0f;
+        osg::StateSet* gss = earthCamera->getOrCreateStateSet();
+        gss->getOrCreateUniform("ClarityAltLo", osg::Uniform::FLOAT)->set(altLo);
+        gss->getOrCreateUniform("ClarityAltHi", osg::Uniform::FLOAT)->set(altHi);
+    }
     root->addChild(earthCamera); cameras.push_back(earthCamera);
 
     // Merge atmosphere with earth color and render them on a screen quad

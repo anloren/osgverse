@@ -6,6 +6,7 @@ uniform sampler2D GlareSampler;
 uniform vec4 UvOffset1, UvOffset2, UvOffset3, UvOffset4;
 uniform vec3 WorldCameraPos, WorldSunDir, EarthOrigin;
 uniform float HdrExposure, GlobalOpaque, LabelOpacity, Overlay2Opacity;
+uniform float ClarityAltLo, ClarityAltHi;  // 地表清晰度高度 band(消补丁):低空→清晰影像,高空→太空大气
 
 VERSE_FS_IN vec3 vertexInWorld, normalInWorld;
 VERSE_FS_IN vec4 texCoord;
@@ -73,30 +74,31 @@ void main()
     maskColor *= 1.0 / 9.0;
 
     vec3 WSD = WorldSunDir, WCP = WorldCameraPos;
-    vec3 P = vertexInWorld, N = normalize(P);// normalInWorld
+    vec3 P = vertexInWorld, N = normalize(P);
     P = N * (length(P) * 0.99);  // FIXME
 
-    float aspect = maskColor.x * radians(360.0), slope = maskColor.y * radians(90.0);
-    vec3 localN = vec3(sin(slope) * sin(aspect), sin(slope) * cos(aspect), cos(slope));
-    vec3 east = normalize(cross(vec3(0, 1, 0), N));
-    vec3 north = normalize(cross(N, east));
-
-    float terrainDetails = 1.0;
-    N = mix(N, mat3(east, north, N) * localN, terrainDetails);
+    // 平滑球面法线昼夜:不再用 z3 粗 OCEAN_MASK 派生法线扰动(那是逐瓦片块状阴影的根源;
+    // mask 仅保留用于上方 maskValue 输出)。真实地形起伏由高程网格几何体现,不靠此着色。
     vec3 originalGroundColor = groundColor.rgb;
-
     float cTheta = max(dot(N, WSD), 0.0); vec3 sunL, skyE;
     sunRadianceAndSkyIrradiance(P, N, WSD, sunL, skyE);
     groundColor.rgb *= max((sunL * cTheta + skyE) / 3.14159265, vec3(0.1));
     groundColor.a *= clamp(GlobalOpaque, 0.0, 1.0);
 
     vec3 extinction = vec3(1.0);
-    // 晨昏线处掠射太阳的 inscatter 是橙红落日色；原值把它渲成一条刺眼的橙带。
-    // 仅夜/晨昏侧(cTheta→0)用到 inscatter，调淡只柔化那条带、不影响白天侧原始影像。
+    // 晨昏线处掠射太阳的 inscatter 是橙红落日色;调淡只柔化那条带、不影响白天侧原始影像。
     vec3 inscatter = inScattering(WCP, P, WSD, extinction, 0.0) * 0.5;
     vec3 compositeColor = groundColor.rgb * extinction + inscatter;
-    //vec4 finalColor = vec4(hdr(compositeColor), groundColor.a);
-    vec4 finalColor = vec4(mix(hdr(compositeColor), originalGroundColor, cTheta), groundColor.a);
+
+    // 高空/太空:现有观感(与原 finalColor 等价;法线改平滑后高空逐瓦片差异本就极小)。
+    vec3 spaceColor = mix(hdr(compositeColor), originalGroundColor, cTheta);
+    // 低空:清晰原始影像 × 平滑昼夜(白天≈1、夜≈0.06、晨昏平滑),无雾、无 HDR 重调色 → 消补丁。
+    float dayNight = mix(0.06, 1.0, smoothstep(-0.05, 0.25, dot(N, WSD)));
+    vec3 clearColor = originalGroundColor * dayNight;
+    // 按相机高度混合:alt < AltLo → clearColor(清晰),alt > AltHi → spaceColor(太空)。
+    float camAlt = length(WCP) - PLANET_RADIUS;
+    float groundClarity = smoothstep(ClarityAltHi, ClarityAltLo, camAlt);
+    vec4 finalColor = vec4(mix(spaceColor, clearColor, groundClarity), groundColor.a);
 
 #ifdef VERSE_GLES3
     fragColor/*Atmospheric Color*/ = finalColor;
