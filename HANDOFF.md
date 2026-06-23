@@ -6,7 +6,7 @@
 ---
 ## ✅ 2026-06-23 会话(续2)— 实时航班层 OpenSky（最新,先读这个）
 
-第三个实时数据流:**全球航班**。v0.10 已打标(地震+降水里程碑)。航班层 6 个功能任务子代理驱动 + 每任务审查,**本地提交、待用户真机交互(滑行/点击)确认后 push**。`dist/EarthExplorer.app` 已重打包。
+第三个实时数据流:**全球航班**。v0.10 已打标(地震+降水里程碑)。航班层 6 个功能任务子代理驱动 + 每任务审查,**已全部 push `origin/master`(HEAD=`93894f60`)**。`dist/EarthExplorer.app` 已重打包。用户已接受现状(含下述覆盖限制)。
 
 - 新模块 `applications/earth_explorer/flight_data.{h,cpp}`(仿地震点要素模板)。**独立点图层 + 独立着色器,不碰 globe 着色器/太阳/海洋 → 4 类回归之外。**
 - 数据:**OpenSky `states/all` 视口包围盒查询**(无 key;主线程每帧由相机算可见区 bbox→mutex→worker 抓;实测欧洲 900km 视口 3648 架)。libhv 后台 GET + picojson。
@@ -15,6 +15,8 @@
 - UI:「实时数据 / Live」组加「航班 (OpenSky)」开关(默认关)。钩子 `EARTH_FLIGHTS=1`、`EARTH_FLIGHTS_FILE=<states.json>`。
 - 设计/计划:`docs/superpowers/specs/2026-06-23-earth-flight-layer-design.md`、`docs/superpowers/plans/2026-06-23-earth-flight-layer.md`。详见 [[earth-flight-layer-done]]。
 - 注:首次抓取偶尔 0 架(启动 bbox 未稳),~12s 后正常;3648 架在 900km 视口偏密(低空更稀),如嫌密可调 bbox/尺寸。
+- **数据覆盖(用户已问"中国为何少"、已确认非 bug)**:OpenSky 众包 ADS-B,覆盖随接收站。实测美国 7195/欧洲 3517/中国 338/印度 258/日韩 42——东亚稀疏=接收站少+中国管制,**改代码补不全**(注册账号只提频率不增覆盖;真·全球需 FR24/Aireon 商业付费源)。用户接受现状。详见 [[earth-flight-layer-done]]。
+- **下一步候选(未定,均结合"无 key 优先")**:火灾 FIRMS(需免费 key、视觉震撼、套点模板)、空气质量 OpenAQ(无 key、最快)、极光 SWPC(无 key、需新极区渲染);或打磨现有(航班拖尾/密度/UI)。
 
 ---
 ## ✅ 2026-06-23 会话(续)— 消除"补丁状瓦片" + 降水两处修复
