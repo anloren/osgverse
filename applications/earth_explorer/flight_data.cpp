@@ -184,7 +184,7 @@ namespace
     public:
         FlightLayerImpl() : _root(0), _enabled(false), _dirty(false),
                             _bbLatMin(-85.0), _bbLonMin(-180.0), _bbLatMax(85.0), _bbLonMax(180.0),
-                            _thread(nullptr), _refreshNow(false) {}
+                            _thread(nullptr), _refreshNow(false), _t0(0.0) {}
         virtual void setEnabled(bool on)
         {
             _enabled = on;
@@ -218,16 +218,41 @@ namespace
         void postSnapshot(const std::vector<Flight>& fs)
         { OpenThreads::ScopedLock<OpenThreads::Mutex> lk(_mutex); _pending = fs; _dirty = true; }
 
-        // 主线程(update 遍历)调用:若有新数据则重建 geode。
-        void syncIfDirty()
+        // 主线程(update 遍历)调用:若有新数据则重建 geode，并重置插值基准时刻。
+        void syncIfDirty(double refTime)
         {
             std::vector<Flight> fs;
             { OpenThreads::ScopedLock<OpenThreads::Mutex> lk(_mutex);
               if (!_dirty) return; fs = _pending; _dirty = false; }
+            _t0 = refTime;
             _flights = fs;
             if (_geode.valid()) _root->removeChild(_geode.get());
             _geode = buildFlightGeode(fs, _ss.get());
             _root->addChild(_geode.get());
+        }
+
+        // 主线程每帧调用:按速度+航向对顶点位置做线性外推(local-plane 近似)。
+        void interpolate(double refTime)
+        {
+            if (!_geode.valid() || _flights.empty()) return;
+            double elapsed = refTime - _t0; if (elapsed < 0.0) elapsed = 0.0;
+            const double R = 6371000.0;
+            osg::Geometry* g = _geode->getDrawable(0)->asGeometry(); if (!g) return;
+            osg::Vec3Array* va = static_cast<osg::Vec3Array*>(g->getVertexArray()); if (!va) return;
+            for (size_t i = 0; i < _flights.size() && i < va->size(); ++i)
+            {
+                const Flight& f = _flights[i];
+                double dist = f.velMS * elapsed;                  // 米
+                double dLat = (dist * cos(f.headingRad)) / R;     // 北向弧度增量
+                double dLon = (dist * sin(f.headingRad)) /
+                              (R * cos(osg::DegreesToRadians(f.lat)));  // 东向弧度增量
+                double lat2 = f.lat + osg::RadiansToDegrees(dLat);
+                double lon2 = f.lon + osg::RadiansToDegrees(dLon);
+                (*va)[i] = osgVerse::Coordinate::convertLLAtoECEF(osg::Vec3d(
+                    osg::DegreesToRadians(lat2), osg::DegreesToRadians(lon2),
+                    f.altM + kFlightLiftMeters));
+            }
+            va->dirty(); g->dirtyBound();
         }
 
         osg::Group* buildScene()
@@ -264,10 +289,16 @@ namespace
         OpenThreads::Mutex _bbMutex;
         FetchThread* _thread;
         bool _refreshNow;
+        double _t0;  // 最近一次快照应用时的 referenceTime,用于插值基准
     };
 
     void SyncCallback::operator()(osg::Node* node, osg::NodeVisitor* nv)
-    { _owner->syncIfDirty(); traverse(node, nv); }
+    {
+        double refTime = nv->getFrameStamp() ? nv->getFrameStamp()->getReferenceTime() : 0.0;
+        _owner->syncIfDirty(refTime);
+        _owner->interpolate(refTime);
+        traverse(node, nv);
+    }
 
     // FetchThread::run() 定义在 FlightLayerImpl 完整定义之后
     void FetchThread::run()
