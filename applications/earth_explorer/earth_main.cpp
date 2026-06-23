@@ -21,6 +21,7 @@
 #include "LayerManager.h"
 #include "quake_data.h"
 #include "precip_data.h"
+#include "flight_data.h"
 #include <VerseCommon.h>
 #include <iostream>
 #include <sstream>
@@ -364,6 +365,9 @@ int main(int argc, char** argv)
 
     QuakeLayer* quakeLayer = nullptr;
     sceneCamera->addChild(configureQuakeData(viewer, earthRoot.get(), mainFolder, &quakeLayer));
+
+    FlightLayer* flightLayer = nullptr;
+    sceneCamera->addChild(configureFlightLayer(viewer, earthRoot.get(), mainFolder, &flightLayer));
 
     osg::ref_ptr<PrecipController> precip = configurePrecipLayer(viewer);
 
