@@ -4,7 +4,20 @@
 > 用户主语言中文，请用中文回复。macOS / Apple Silicon。
 
 ---
-## ✅ 2026-06-23 会话(续)— 消除"补丁状瓦片" + 降水两处修复（最新,先读这个）
+## ✅ 2026-06-23 会话(续2)— 实时航班层 OpenSky（最新,先读这个）
+
+第三个实时数据流:**全球航班**。v0.10 已打标(地震+降水里程碑)。航班层 6 个功能任务子代理驱动 + 每任务审查,**本地提交、待用户真机交互(滑行/点击)确认后 push**。`dist/EarthExplorer.app` 已重打包。
+
+- 新模块 `applications/earth_explorer/flight_data.{h,cpp}`(仿地震点要素模板)。**独立点图层 + 独立着色器,不碰 globe 着色器/太阳/海洋 → 4 类回归之外。**
+- 数据:**OpenSky `states/all` 视口包围盒查询**(无 key;主线程每帧由相机算可见区 bbox→mutex→worker 抓;实测欧洲 900km 视口 3648 架)。libhv 后台 GET + picojson。
+- 渲染(震撼+快):单 `GL_POINTS` + **按航向旋转的发光箭头**(片元旋转 gl_PointCoord 画三角)+ **高度配色**(低暖橙/中黄白/高冷青蓝);**每帧 CPU 外推位置→平滑滑行**(velMS×heading×elapsed,数千架仍廉价)。
+- 交互:点击航班→**右上角「航班详情」面板**(呼号/国家/高度/速度/航向,叠在地震卡下方,遵循信息UI右上角偏好)。
+- UI:「实时数据 / Live」组加「航班 (OpenSky)」开关(默认关)。钩子 `EARTH_FLIGHTS=1`、`EARTH_FLIGHTS_FILE=<states.json>`。
+- 设计/计划:`docs/superpowers/specs/2026-06-23-earth-flight-layer-design.md`、`docs/superpowers/plans/2026-06-23-earth-flight-layer.md`。详见 [[earth-flight-layer-done]]。
+- 注:首次抓取偶尔 0 架(启动 bbox 未稳),~12s 后正常;3648 架在 900km 视口偏密(低空更稀),如嫌密可调 bbox/尺寸。
+
+---
+## ✅ 2026-06-23 会话(续)— 消除"补丁状瓦片" + 降水两处修复
 
 **已全部 push `origin/master`(HEAD=`f48e61af`,含降水层+性能/切换/补丁修复共 14 提交)。** 用户已确认观感 OK(瞬态加载补丁=在线流式固有,选择维持现状)。`dist/EarthExplorer.app` 已重打包。
 
