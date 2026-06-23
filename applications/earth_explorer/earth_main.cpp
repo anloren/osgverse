@@ -486,6 +486,12 @@ int main(int argc, char** argv)
         QuakeLayer* qptr = quakeLayer;
         quakes.apply = [qptr](const OverlayLayer& l) { if (qptr) qptr->setEnabled(l.enabled); };
         layerMgr.add(quakes);
+
+        OverlayLayer flights; flights.id = "flights"; flights.displayName = u8"航班 (OpenSky)";
+        flights.group = u8"实时数据 / Live"; flights.enabled = false; flights.hasOpacity = false;
+        FlightLayer* fptr = flightLayer;
+        flights.apply = [fptr](const OverlayLayer& l) { if (fptr) fptr->setEnabled(l.enabled); };
+        layerMgr.add(flights);
     }
     // 同步初始状态到 uniform（apply 只在交互时触发，这里推一次初值）
     if (OverlayLayer* lbl = layerMgr.find("labels"))
@@ -517,6 +523,13 @@ int main(int argc, char** argv)
         const char* pEnv = getenv("EARTH_PRECIP");
         if (pEnv && *pEnv) pp->enabled = (atoi(pEnv) != 0);
         layerMgr.setEnabled("precip", pp->enabled);
+    }
+    if (OverlayLayer* fl = layerMgr.find("flights"))
+    {
+        // EARTH_FLIGHTS=<非0> 强制开启航班层(headless 验证用)。
+        const char* flEnv = getenv("EARTH_FLIGHTS");
+        if (flEnv && *flEnv) fl->enabled = (atoi(flEnv) != 0);
+        layerMgr.setEnabled("flights", fl->enabled);
     }
 
     // ImGui 控制面板 — 挂到最终 HUD 相机（cameras[3]），确保在地球图像之上绘制

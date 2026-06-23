@@ -4,6 +4,7 @@
 #include <osg/NodeCallback>
 #include <osgDB/FileUtils>
 #include <osgGA/GUIEventHandler>
+#include <osgViewer/View>
 #include <OpenThreads/Thread>
 #include <OpenThreads/Mutex>
 #include <modeling/Math.h>
@@ -18,6 +19,7 @@
 #include <fstream>
 #include <sstream>
 #include <cstdio>
+#include <cmath>
 #include "flight_data.h"
 
 namespace
@@ -166,12 +168,29 @@ namespace
         FlightLayerImpl* _owner;
     };
 
+    // 抓取线程:仅图层开启时每 ~12s 拉一次(分片 sleep 便于秒退)。不碰 GL/场景图。
+    class FetchThread : public OpenThreads::Thread
+    {
+    public:
+        FetchThread(FlightLayerImpl* o) : _owner(o), _done(false) {}
+        virtual int cancel() { _done = true; return OpenThreads::Thread::cancel(); }
+        virtual void run();   // 定义在 FlightLayerImpl 之后(需其完整定义)
+    protected:
+        FlightLayerImpl* _owner; bool _done;
+    };
+
     class FlightLayerImpl : public osg::Referenced, public FlightLayer
     {
     public:
         FlightLayerImpl() : _root(0), _enabled(false), _dirty(false),
-                            _bbLatMin(-85.0), _bbLonMin(-180.0), _bbLatMax(85.0), _bbLonMax(180.0) {}
-        virtual void setEnabled(bool on) { _enabled = on; if (_root) _root->setNodeMask(on ? ~0u : 0u); }
+                            _bbLatMin(-85.0), _bbLonMin(-180.0), _bbLatMax(85.0), _bbLonMax(180.0),
+                            _thread(nullptr), _refreshNow(false) {}
+        virtual void setEnabled(bool on)
+        {
+            _enabled = on;
+            if (_root) _root->setNodeMask(on ? ~0u : 0u);
+            if (on) _refreshNow = true;
+        }
         virtual bool isEnabled() const { return _enabled; }
         virtual void setViewBBox(double latMin, double lonMin, double latMax, double lonMax)
         {
@@ -181,9 +200,21 @@ namespace
         virtual FlightInfo getSelected() const { return FlightInfo(); }
         virtual void clearSelected() {}
 
+        void startFetch() { if (!_thread) { _thread = new FetchThread(this); _thread->startThread(); } }
+
+        // 后台线程读 bbox 的辅助(加锁)
+        void getBBox(double& a, double& b, double& c, double& d)
+        {
+            OpenThreads::ScopedLock<OpenThreads::Mutex> lk(_bbMutex);
+            a = _bbLatMin; b = _bbLonMin; c = _bbLatMax; d = _bbLonMax;
+        }
+
+        // 后台线程轮询:是否需要立刻刷新(取走后清零)
+        bool takeRefreshNow() { bool r = _refreshNow; _refreshNow = false; return r; }
+
         osg::Group* root() { return _root; }
 
-        // 后台线程(或临时直调)交付新快照(加锁)。
+        // 后台线程交付新快照(加锁)。
         void postSnapshot(const std::vector<Flight>& fs)
         { OpenThreads::ScopedLock<OpenThreads::Mutex> lk(_mutex); _pending = fs; _dirty = true; }
 
@@ -220,7 +251,9 @@ namespace
             return _root;
         }
     protected:
-        virtual ~FlightLayerImpl() {}
+        virtual ~FlightLayerImpl()
+        { if (_thread) { _thread->cancel(); _thread->join(); delete _thread; _thread = nullptr; } }
+
         osg::Group* _root;   // 裸指针:由返回节点经 UserData 拥有,本对象不拥有(无引用环)
         osg::ref_ptr<osg::Geode> _geode;
         osg::ref_ptr<osg::StateSet> _ss;
@@ -229,10 +262,67 @@ namespace
         bool _enabled, _dirty;
         double _bbLatMin, _bbLonMin, _bbLatMax, _bbLonMax;
         OpenThreads::Mutex _bbMutex;
+        FetchThread* _thread;
+        bool _refreshNow;
     };
 
     void SyncCallback::operator()(osg::Node* node, osg::NodeVisitor* nv)
     { _owner->syncIfDirty(); traverse(node, nv); }
+
+    // FetchThread::run() 定义在 FlightLayerImpl 完整定义之后
+    void FetchThread::run()
+    {
+        const int kIntervalTicks = 120;   // ~12s ÷ 100ms/tick
+        int tick = 0;
+        while (!_done)
+        {
+            if (_owner->isEnabled())
+            {
+                bool force = _owner->takeRefreshNow();
+                if (force || tick <= 0)
+                {
+                    double a, b, c, d; _owner->getBBox(a, b, c, d);
+                    _owner->postSnapshot(fetchFlights(a, b, c, d));
+                    tick = kIntervalTicks;
+                }
+                else tick--;
+            }
+            else tick = 0;   // 关闭时,下次开启立即抓
+            OpenThreads::Thread::microSleep(100000);  // 100ms
+        }
+        _done = true;
+    }
+
+    // 视口 bbox 事件处理器:每帧计算相机可见范围,更新 FlightLayerImpl 的 bbox。
+    class FlightBBoxHandler : public osgGA::GUIEventHandler
+    {
+    public:
+        FlightBBoxHandler(FlightLayerImpl* o) : _owner(o) {}
+        virtual bool handle(const osgGA::GUIEventAdapter& ea, osgGA::GUIActionAdapter& aa)
+        {
+            if (ea.getEventType() != osgGA::GUIEventAdapter::FRAME) return false;
+            if (!_owner->isEnabled()) return false;
+            osgViewer::View* view = static_cast<osgViewer::View*>(&aa);
+            osg::Vec3d eye = view->getCamera()->getInverseViewMatrix().getTrans();
+            osg::Vec3d lla = osgVerse::Coordinate::convertECEFtoLLA(eye);  // (latRad, lonRad, altM)
+            double lat0 = osg::RadiansToDegrees(lla[0]), lon0 = osg::RadiansToDegrees(lla[1]);
+            double h = lla[2]; const double R = 6371000.0;
+            double cosv = R / (R + (h > 0.0 ? h : 0.0));
+            double thetaDeg = (cosv < 1.0) ? osg::RadiansToDegrees(acos(cosv)) : 0.0;  // 地平线张角
+            if (thetaDeg >= 80.0)  // 高空 → 全球
+            { _owner->setViewBBox(-85.0, -180.0, 85.0, 180.0); return false; }
+            double latMin = lat0 - thetaDeg, latMax = lat0 + thetaDeg;
+            double cosLat = cos(osg::DegreesToRadians(lat0)); if (cosLat < 0.2) cosLat = 0.2;
+            double lonHalf = thetaDeg / cosLat; if (lonHalf > 180.0) lonHalf = 180.0;
+            double lonMin = lon0 - lonHalf, lonMax = lon0 + lonHalf;
+            if (latMin < -85.0) latMin = -85.0; if (latMax > 85.0) latMax = 85.0;
+            if (lonMin < -180.0) lonMin = -180.0; if (lonMax > 180.0) lonMax = 180.0;
+            _owner->setViewBBox(latMin, lonMin, latMax, lonMax);
+            return false;
+        }
+    protected:
+        FlightLayerImpl* _owner;
+    };
 }
 
 osg::Node* configureFlightLayer(osgViewer::View& viewer, osg::Node* earthRoot,
@@ -242,7 +332,7 @@ osg::Node* configureFlightLayer(osgViewer::View& viewer, osg::Node* earthRoot,
     osg::Group* root = impl->buildScene();
     root->setUserData(impl.get());
     if (outLayer) *outLayer = impl.get();
-    impl->postSnapshot(fetchFlights(-85, -180, 85, 180));  // 临时:Task 4 改后台线程
-    impl->setEnabled(true);                                 // 临时:Task 4 改回默认关
+    impl->startFetch();   // 线程常驻;仅 isEnabled() 时才真正联网
+    viewer.addEventHandler(new FlightBBoxHandler(impl.get()));
     return root;
 }
