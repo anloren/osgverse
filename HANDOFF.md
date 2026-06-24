@@ -4,7 +4,18 @@
 > 用户主语言中文，请用中文回复。macOS / Apple Silicon。
 
 ---
-## ✅ 2026-06-23 会话(续2)— 实时航班层 OpenSky（最新,先读这个）
+## ✅ 2026-06-24 会话 — 香港官方 3D Tiles 接入 spike（最新,先读这个）
+
+香港地政总署官方 3D 城市模型接入的**最小验证 spike**,已合并 master(`a43e984f`,**未 push,待用户决定 push 时机/真机看一眼**)。核心落位链路**数值验证通过**。详见记忆 [[earth-hk-3dtiles-spike-verified]]、`docs/superpowers/specs|plans/2026-06-24-earth-hk-3dtiles*`。
+
+- **数据**:香港 **3D Spatial Data API = Cesium 3D Tiles + WGS84**(`https://data.map.gov.hk/api/3d-data/3dsd/WGS84/{building,infrastructure}/tileset.json?key=KEY`)。**免费 key 已发邮件 `3dmap@landsd.gov.hk` 申请、待回**;授权可商用但**需署名 attribution**。下载版另有 OBJ/OSGB/Cesium3DTiles(3d.map.gov.hk 交互选区,非批量;**不下载全港**——流式才对)。
+- **引擎已自带**:`plugins/osgdb_3dtiles`(tileset.json 递归 + root transform + PagedLOD + HTTP)+ `osgdb_gltf`(b3dm/glb),直吃,无需造轮子。
+- **实现**:新模块 `applications/earth_explorer/tiles3d_data.{h,cpp}` + `EARTH_3DTILES=<url>` 钩子,挂 `sceneCamera`(同地震/航班 ECEF 系)。http→`readNodeFile(url+".verse_web", Options("Extension=verse_tiles"))`/local→`url+".verse_tiles"`。**不碰 globe 着色器/太阳/海洋 → 4 类回归之外**;默认不设钩子零影响。
+- **验证 = 数值铁证**:公开样本(earthsdk 大雁塔、ArcGIS Stuttgart)**都 404** → 合成本地 fixture `applications/earth_explorer/test/gen_hk_3dtiles_fixture.py`(WGS84 ENU→ECEF 烘焙在香港坐标,引用自带 `girl.glb`)。加载节点 ECEF bound center 与香港中环理论值 `(-2416519,5387607,2403296)` **三轴吻合几十米** = 落位正确。矩阵约定:Cesium 列主序数组 = 插件 `osg::Matrix(m)` 行主序 + v*M,**直接填不转置**。
+- **待真数据(key 到了)**:换香港 building URL → 处理 `?key=` 查询串解析、验**多层流式 LOD** + 真机视觉、做正式可开关图层 + UI 数据来源署名。spike 局限:单 tile fixture 验不了多层流式;合成 PBR 人物 headless 难肉眼辨(真数据带纹理建筑自然可见)。
+
+---
+## ✅ 2026-06-23 会话(续2)— 实时航班层 OpenSky
 
 第三个实时数据流:**全球航班**。v0.10 已打标(地震+降水里程碑)。航班层 6 个功能任务子代理驱动 + 每任务审查,**已全部 push `origin/master`(HEAD=`93894f60`)**。`dist/EarthExplorer.app` 已重打包。用户已接受现状(含下述覆盖限制)。
 
