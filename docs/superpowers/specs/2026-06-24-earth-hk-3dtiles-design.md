@@ -74,3 +74,8 @@
 ## 明确不做(YAGNI)
 
 完整 UI、香港专属渲染样式、infrastructure/terrain 层、全港压测、离线批量下载(架构上不做本地全存)。
+
+## 实现注记(2026-06-24)
+
+- 决策表里的公开样本(earthsdk 大雁塔)**实测 404**,搜到的备选 ArcGIS Stuttgart 亦 404。**改用合成本地 fixture**(`applications/earth_explorer/test/gen_hk_3dtiles_fixture.py`,WGS84 ENU→ECEF transform 烘焙在香港坐标)——更可控、可复现,直接验香港落位。
+- 核心落位链路**已数值验证通过**(bound center 与香港理论 ECEF 三轴吻合到几十米)。详见 plan「实现结果」。

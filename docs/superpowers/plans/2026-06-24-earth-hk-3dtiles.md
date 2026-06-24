@@ -79,14 +79,21 @@
 
 ## Final Verification(对齐 spec 成功标准)
 
-- [ ] 构建通过;不设 `EARTH_3DTILES` 时行为与改动前一致。
-- [ ] 样本 tileset 渲染出来(标准 1)。
-- [ ] 落在大雁塔正确经纬(标准 2)。
-- [ ] 大致贴地(标准 3)。
-- [ ] 缩放/平移流式 LOD 正常、不崩、不冻结(标准 4)。
-- [ ] 不破坏 globe/大气/海洋/地震/航班;关钩子零影响(标准 5)。
+- [x] 构建通过;不设 `EARTH_3DTILES` 时行为与改动前一致。
+- [x] 样本 tileset 渲染出来(标准 1)。
+- [x] 落在正确经纬(标准 2)——合成香港 fixture,bound center 数值吻合(大雁塔已 404,改合成)。
+- [~] 大致贴地(标准 3)——数值在椭球面 h=0;视觉精确贴合留真数据 + 真机。
+- [ ] 缩放/平移流式 LOD 正常、不崩、不冻结(标准 4)——单 tile fixture 验不了,留真香港多层 tileset。
+- [x] 不破坏 globe/大气/海洋/地震/航班;关钩子零影响(标准 5)。
 - [ ] 真机交付用户肉眼确认(落位/贴地/流式/共存)——遵循"务必肉眼验证"铁律。
+
+## 实现结果(2026-06-24)
+
+- **Phase 1 完成**(`049ec32a`):`tiles3d_data.{h,cpp}` + `EARTH_3DTILES` 钩子 + earth_main 挂载 + CMake。关钩子 headless exit0、零日志、地球渲染正常;bogus URL 优雅降级不崩;`git show` 确认未碰 glsl/sun/ocean → 4 类回归之外。
+- **数据源调整**:计划中的 earthsdk 大雁塔、以及搜到的 ArcGIS Stuttgart 公开样本**均 404 失效**。改用**合成本地 fixture**:`applications/earth_explorer/test/gen_hk_3dtiles_fixture.py`(WGS84 ENU→ECEF root transform 烘焙在香港中环,引用自带 `girl.glb`)。更可控、可复现,直接验香港落位。
+- **落位验证 = 数值铁证**(`d0360e8d` 加诊断):加载节点 ECEF bound center = `(-2.4165e6, 5.38758e6, 2.40337e6)`,与香港中环理论 ECEF `(-2416519, 5387607, 2403296)` 三轴吻合到**几十米**(偏差 = 模型局部中心 × scale)。证明 osgdb_3dtiles 正确应用 tileset root transform、与地震/航班同 ECEF 系。**矩阵约定**(Cesium 列主序数组 = 插件 `osg::Matrix(m)` 行主序 + v*M)经实测确认。
+- **局限**:合成用的 `girl.glb` 是 PBR 人物、headless 俯视/无纹理下肉眼难辨(真数据带纹理建筑自然可见,数值验证更精确)。
 
 ## 交接给后续(spike 通过后另立)
 
-key 到位 → 换香港 building URL、处理 `?key=` 查询串解析、做成正式可开关图层 + UI 署名。详见 spec「后续路径」。
+key 到位 → 换香港 building URL、处理 `?key=` 查询串解析、验证多层流式 LOD + 真机视觉、做成正式可开关图层 + UI 署名。详见 spec「后续路径」。
