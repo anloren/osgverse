@@ -1,5 +1,6 @@
 #include <osg/Group>
 #include <osg/Node>
+#include <osg/io_utils>
 #include <osgDB/ReadFile>
 #include <osgDB/Options>
 #include <osgViewer/View>
@@ -35,7 +36,9 @@ osg::Node* configure3DTilesLayer(osgViewer::View& /*viewer*/,
     if (tiles.valid())
     {
         group->addChild(tiles.get());
-        OSG_NOTICE << "[Tiles3D] loaded: " << url << std::endl;
+        const osg::BoundingSphere& bs = tiles->getBound();
+        OSG_NOTICE << "[Tiles3D] loaded: " << url << "  bound center=" << bs.center()
+                   << " radius=" << bs.radius() << std::endl;
     }
     else
     {
