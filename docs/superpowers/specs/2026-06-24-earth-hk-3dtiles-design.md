@@ -79,3 +79,13 @@
 
 - 决策表里的公开样本(earthsdk 大雁塔)**实测 404**,搜到的备选 ArcGIS Stuttgart 亦 404。**改用合成本地 fixture**(`applications/earth_explorer/test/gen_hk_3dtiles_fixture.py`,WGS84 ENU→ECEF transform 烘焙在香港坐标)——更可控、可复现,直接验香港落位。
 - 核心落位链路**已数值验证通过**(bound center 与香港理论 ECEF 三轴吻合到几十米)。详见 plan「实现结果」。
+
+## 密钥安全(开源约定 —— 因仓库公开)
+
+EarthExplorer 开源(`github.com/anloren/osgverse`),香港 API key **绝不能进仓库**(否则任何人可扒取、蹭配额、致 key 被吊销;且已接受 indemnify 条款,他人滥用或牵连)。铁律:
+
+- **key 只在运行时注入**:`EARTH_3DTILES=<完整含 key 的 tileset URL>`(env),或本地配置文件(已加 `.gitignore`:`earth_keys.local` / `.env*`)。源码与提交里**只有占位符 `<your-key>`**。
+- 提交前 `git diff` 扫一眼,确认没带 key。
+- 分发 `.app` **不内嵌 key**——每个用户自申请、填自己的(数据免费)。
+- 万一手滑提交:key 已留 git 历史,**必须找地政总署重置**(改历史不可靠)。
+- 做正式图层时按优先级读 key:**env → 本地 gitignored 配置 → UI 输入框**;仓库始终零 key。
