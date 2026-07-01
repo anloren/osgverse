@@ -1,7 +1,6 @@
 #include <osg/Group>
 #include <osg/Node>
 #include <osg/Program>
-#include <osg/Texture2D>
 #include <osg/io_utils>
 #include <osgDB/ReadFile>
 #include <osgDB/Options>
@@ -57,13 +56,18 @@ static void applyTilesShader(osg::StateSet* ss)
 {
     osg::Shader* vs = new osg::Shader(osg::Shader::VERTEX, tilesVertCode);
     osg::Shader* fs = new osg::Shader(osg::Shader::FRAGMENT, tilesFragCode);
+    vs->setName("Tiles3D_VS"); fs->setName("Tiles3D_FS");
     osgVerse::Pipeline::createShaderDefinitions(vs, 100, 130);
     osgVerse::Pipeline::createShaderDefinitions(fs, 100, 130);
 
     osg::ref_ptr<osg::Program> program = new osg::Program;
     program->addShader(vs); program->addShader(fs);
+    // applyToGlobe() 绑定 globe 程序时不带 OVERRIDE(UtilitiesEx.cpp apply()),普通子节点自己的
+    // 程序本就能替换继承值,不需要 OVERRIDE 才能生效。这里加 OVERRIDE 是防御性的:3D Tiles 内容
+    // 来自外部数据源(Cesium tileset,非本项目自制),若某天遇到内嵌自带 Program/材质覆盖的瓦片,
+    // OVERRIDE 能保证仍然用这份专用着色器渲染,不被瓦片自带的状态意外顶掉。
     ss->setAttributeAndModes(program.get(),
-        osg::StateAttribute::ON | osg::StateAttribute::OVERRIDE);  // 覆盖继承的 globe 程序
+        osg::StateAttribute::ON | osg::StateAttribute::OVERRIDE);
     ss->getOrCreateUniform("DiffuseMap", osg::Uniform::INT)->set((int)0);  // 材质贴图绑在单元 0
 }
 
