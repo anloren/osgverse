@@ -7,6 +7,7 @@
 #include <osgDB/FileCache>
 #include <algorithm>
 #include <mutex>
+#include <set>
 
 #include "3rdparty/libhv/all/client/requests.h"
 #include <readerwriter/Utilities.h>
@@ -298,7 +299,14 @@ public:
 
         ReadResult readResult = readFile(objectType, reader, buffer, lOptions.get());
         lOptions->getDatabasePathList().pop_front();
-        if (cache && readResult.success())
+
+        // Cesium 3D Tiles binary formats (b3dm/i3dm/cmpt/pnts) may embed non-standard
+        // per-vertex attributes (e.g. _BATCHID) that the glTF writer cannot serialize
+        // back out (crashes in tinygltf's buffer serialization). Skip the write-through
+        // cache for these; re-fetching them over the network on next load is cheap.
+        static const std::set<std::string> sNoCacheWriteExts = {"b3dm", "i3dm", "cmpt", "pnts"};
+        bool skipCacheWrite = (sNoCacheWriteExts.find(ext) != sNoCacheWriteExts.end());
+        if (cache && readResult.success() && !skipCacheWrite)
         {
             osg::ref_ptr<osgDB::Options> op = new osgDB::Options("mimeType=" + contentType);
             WriteResult wr = writeFile(readResult, cache, fileName, op.get());

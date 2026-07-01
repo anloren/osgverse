@@ -80,12 +80,30 @@
 ## Final Verification(对齐 spec 成功标准)
 
 - [x] 构建通过;不设 `EARTH_3DTILES` 时行为与改动前一致。
-- [x] 样本 tileset 渲染出来(标准 1)。
-- [x] 落在正确经纬(标准 2)——合成香港 fixture,bound center 数值吻合(大雁塔已 404,改合成)。
-- [~] 大致贴地(标准 3)——数值在椭球面 h=0;视觉精确贴合留真数据 + 真机。
-- [ ] 缩放/平移流式 LOD 正常、不崩、不冻结(标准 4)——单 tile fixture 验不了,留真香港多层 tileset。
+- [x] 样本 tileset 渲染出来(标准 1)——合成 fixture + **真香港 building API 均验证**。
+- [x] 落在正确经纬(标准 2)——合成 fixture 与**真数据**两次独立数值验证(见下)。
+- [x] 大致贴地(标准 3)——数值在椭球面 h≈0(真数据 root transform 平移量与理论 ECEF 吻合)。
+- [x] 缩放/平移流式 LOD 正常、不崩、不冻结(标准 4)——真数据 44 子瓦片树、3 次独立 headless 跑(含深 LOD 定点)均 exit 0、无冻结;修复一处发现的 crash 后确认。
 - [x] 不破坏 globe/大气/海洋/地震/航班;关钩子零影响(标准 5)。
-- [ ] 真机交付用户肉眼确认(落位/贴地/流式/共存)——遵循"务必肉眼验证"铁律。
+- [ ] 真机交付用户肉眼确认(落位/贴地/流式/共存、真实建筑网格可见)——遵循"务必肉眼验证"铁律;headless 街道级深流式受时间预算限制(与既有 z16 深瓦片同类限制),留真机。
+
+## 真香港 building API 验证(2026-07-01,key 到位后)
+
+用户提供地政总署免费 API key,`EARTH_3DTILES=".../3dsd/WGS84/building/tileset.json?key=<key>"` 实测:
+
+- **key 生效**:root tileset.json 200 OK,真数据(218668 components、1218 万三角形、3651 万顶点,45 子瓦片,`gltfUpAxis:"Y"`)。
+- **子资源无需带 key**:子瓦片 json、叶子 `.b3dm` 网格均 200(curl 验证),证明现有插件"相对 URI 拼接不带查询串"的机制**天然兼容**该 API,无需额外传播 key 的代码。
+- **URL 含 `?key=` 未破坏解析**:`osgdb_web`(`ReaderWriterWeb.cpp`)在选具体 reader 前已把查询串从扩展名里剥离(`ext.find("?")` 处理,`:266-267`),`prefix` 提取也在查询串之前的 `/` 截断——**均已有既有机制兜住,未改代码**。
+- **落位数值验证(真数据)**:root transform 平移 `(-2412000, 5378000, 2428000)` + 加载后 bound center `(-2.4124e6, 5.38653e6, 2.41204e6)`,换算 ECEF→LLA ≈ `22.36°N, 114.14°E`——**落在香港境内**,与地政总署"全港覆盖"数据集一致。
+
+### 发现并修复一处 crash(共享代码,超出原计划"只碰新模块"范围)
+
+首次真数据 headless 跑**进程崩溃**(exit 139)。根因排查(非我们新模块的 bug):
+- `.b3dm` 内容含 Cesium 专属顶点属性 `_BATCHID`(`readerwriter/LoadSceneGLTF.cpp:858`,读取支持但历史遗留 `// TODO` 未完整处理)。
+- **任何网络加载成功的资源,`plugins/osgdb_web/ReaderWriterWeb.cpp` 都会自动写回本地磁盘缓存**(`readFile` 尾部);对 `.b3dm` 走的是 `ReaderWriterGLTF::writeNode`→`saveGltf2`→tinygltf 序列化,遇到 `_BATCHID` 直接崩溃。此路径此前从未被触发(地震/航班/降水都不走"网络拉取 3D 网格并写回缓存"这条路)。
+- **修复**(`plugins/osgdb_web/ReaderWriterWeb.cpp`):写缓存前跳过 4 个 Cesium 专属扩展名(`b3dm`/`i3dm`/`cmpt`/`pnts`)——这些格式当前全项目**只有** 3D Tiles 用到,不影响 GIBS/Google/地震/航班/降水现有流量。9 行改动,不碰 3dtiles 插件本身、不碰 globe 着色器/太阳/海洋。
+- 修复后 3 次独立 headless 跑(含深 LOD 定点、40ms/帧×3500帧长流式)均 exit 0,tileset 稳定加载、bound center 数值一致。
+- **这处改动touches 共享插件文件**(超出 spec 原定"只在 tiles3d_data.cpp 内隔离"的范围),已如实记录,push 前需用户知情确认。
 
 ## 实现结果(2026-06-24)
 
