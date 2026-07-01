@@ -105,6 +105,17 @@
 - 修复后 3 次独立 headless 跑(含深 LOD 定点、40ms/帧×3500帧长流式)均 exit 0,tileset 稳定加载、bound center 数值一致。
 - **这处改动touches 共享插件文件**(超出 spec 原定"只在 tiles3d_data.cpp 内隔离"的范围),已如实记录,push 前需用户知情确认。
 
+### 发现并修复渲染破碎/无贴图问题(2026-07-01~02,独立于上述 crash)
+
+崩溃修复后,真实香港建筑渲染出**灰白色、无贴图、形状破碎**的多边形(不是崩溃,是渲染观感问题)。用官方 `3d.map.gov.hk`(CesiumJS)门户加载同一数据完全正常,**证明数据没问题,bug 在 osgVerse 代码里**。完整排查过程 + 判定分支见独立文档 `docs/superpowers/plans/2026-07-01-earth-hk-3dtiles-render-fix.md`,这里只记结论:
+
+- **决定性隔离实验**:单独一个真实 b3dm 瓦片(完全脱离瓦片树,走与真实场景相同的网络加载路径)依然渲染破碎 → **bug 在单文件 b3dm/glTF 渲染层,不在瓦片树组合**。
+- **真根因(出乎意料)**:不是数据解析 bug——`LoadSceneGLTF.cpp` 的顶点/索引/纹理解码经运行时插桩、和独立 Python 解码器逐字节比对,**完全正确**。真根因是**着色器继承**:3D Tiles 图层挂在 `sceneCamera` 下,该相机的 StateSet 通过 `applyToGlobe()` 绑定了 `scattering_globe` 大气散射着色器(子节点默认继承),`Tiles3DLayer` 自己没有程序 → b3dm 建筑被地球地形着色器的地表 clarity/大气混合逻辑渲染成惨白破碎面片。
+- **修复**(`c0dd09ff` + 打磨 `dcc6ad28`):只改 `applications/earth_explorer/tiles3d_data.cpp`(+62 行),给这层挂一个自成一体的最小网格着色器(采样 `DiffuseMap` 单元 0 + 简单半兰伯特光照,不依赖大气 uniform),用 `OVERRIDE` 覆盖继承的 globe 程序。仿照 `city_data.cpp` 建筑图层的既有模式。**`LoadSceneGLTF.cpp`/`ReaderWriter3dTiles.cpp`/globe 着色器零改动**。
+- **顺带修复**(`ed6257c3`):`ReaderWriter3dTiles.cpp` 的 box→包围球计算有真实 bug(只采样 4 点、漏掉负方向和真正角点),已修复(不是本次破碎问题的主因,但修复本身独立成立)。
+- **验证**:本地 HTTP fixture 隔离测试(真实数据,`applications/earth_explorer/test/hk_single_tile_fixture/`)修复前后肉眼对比 + 独立子代理二审(合规性 + 代码质量,均通过、无 Critical)+ 4 类历史回归 headless 复测(全球远视角、昆明区域 `EARTH_TILT` 低空倾斜)+ 关钩子零影响复查 + 与地震/航班共存检查(本地 fixture),均通过。
+- **仍待办**:真实 API 对密集城区(中环/汇丰大厦)的最终验证,以及用户真机肉眼确认(和官方门户对比)——当前会话无真实 key 权限,只用本地 fixture(真实数据但是村镇低层建筑,非 CBD 密度)验证过。key 到位后需补做。
+
 ## 实现结果(2026-06-24)
 
 - **Phase 1 完成**(`049ec32a`):`tiles3d_data.{h,cpp}` + `EARTH_3DTILES` 钩子 + earth_main 挂载 + CMake。关钩子 headless exit0、零日志、地球渲染正常;bogus URL 优雅降级不崩;`git show` 确认未碰 glsl/sun/ocean → 4 类回归之外。

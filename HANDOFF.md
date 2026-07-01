@@ -4,6 +4,19 @@
 > 用户主语言中文，请用中文回复。macOS / Apple Silicon。
 
 ---
+## ✅ 2026-07-02 会话 — 香港真实 3D Tiles 渲染破碎 bug 已修复（最新，先读这个）
+
+用户拿到香港地政总署免费 API key 后，真实建筑数据渲染成**灰白破碎多边形、无贴图**（不是崩溃）。官方 `3d.map.gov.hk` 门户加载同一数据完全正常 → 证明数据没问题、bug 在 osgVerse。**已定位真根因并修复**，均已提交（未 push，等你确认）：
+
+- **决定性隔离实验**：单独一个真实 b3dm 瓦片（脱离瓦片树、走与真实场景相同网络路径）依然破碎 → bug 在单文件渲染层，不在瓦片树组合。
+- **真根因（出乎意料，不是数据解析问题）**：3D Tiles 图层挂在 `sceneCamera` 下，默认**继承**了地球的 `scattering_globe` 大气散射着色器（自己没挂程序）→ 被地表 clarity/大气混合逻辑渲染成惨白破碎面片。`LoadSceneGLTF.cpp` 的顶点/索引/纹理解码经运行时插桩验证**完全正确**，不是它的锅。
+- **修复**（`c0dd09ff`+`dcc6ad28`，仅 `applications/earth_explorer/tiles3d_data.cpp` +62行）：给这层挂一个自成一体的最小网格着色器（采样 DiffuseMap + 简单半兰伯特光照），`OVERRIDE` 覆盖继承的 globe 程序。仿照 `city_data.cpp` 建筑图层的既有模式。**`LoadSceneGLTF.cpp`/globe 着色器零改动**。
+- 顺带修复 `ReaderWriter3dTiles.cpp` 的 box→包围球计算 bug（`ed6257c3`，独立成立，不是破碎问题主因）。
+- **验证**：本地 HTTP fixture（真实数据，已提交 `applications/earth_explorer/test/hk_single_tile_fixture/`）隔离测试肉眼前后对比 + 子代理二审（合规性+代码质量，均过）+ 4 类历史回归 headless 复测 + 关钩子零影响 + 与地震/航班共存，均通过。
+- **仍待办**：真实 API 密集城区（中环）最终验证 + 用户真机肉眼对比官方门户——当前无真实 key 权限，只验证过本地 fixture（真实数据但是村镇低层建筑）。key 在手后请先用真实 API 跑一次密集区、和官方门户对比确认。
+- 详见 `docs/superpowers/plans/2026-07-01-earth-hk-3dtiles-render-fix.md`（完整排查过程+判定分支）、`docs/superpowers/plans/2026-06-24-earth-hk-3dtiles.md`（累积实现结果）。
+
+---
 ## ✅ 2026-06-24 会话 — 香港官方 3D Tiles 接入 spike（最新,先读这个）
 
 香港地政总署官方 3D 城市模型接入的**最小验证 spike**,已合并 master(`a43e984f`,**未 push,待用户决定 push 时机/真机看一眼**)。核心落位链路**数值验证通过**。详见记忆 [[earth-hk-3dtiles-spike-verified]]、`docs/superpowers/specs|plans/2026-06-24-earth-hk-3dtiles*`。

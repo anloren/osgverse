@@ -242,22 +242,15 @@ git commit -m "fix(3dtiles): <根据 Step 5 实际修复内容填写具体描述
 
 **Files:** `readerwriter/LoadSceneGLTF.cpp`(读+改)
 
-- [ ] **Step 1: 读 `createMesh()` 里顶点/索引缓冲的实际解码代码**(本会话只读到 636-689 行的材质/扩展预处理部分,真正的 `POSITION`/`NORMAL`/`TEXCOORD_0` accessor → `osg::Vec3Array`/`osg::Vec2Array`,以及 indices accessor → `osg::DrawElementsUShort` 的代码在更后面,继续往下读)。对照 glTF 2.0 规范的 accessor 定义(`bufferView.byteOffset` + `accessor.byteOffset`,以及可选的 `bufferView.byteStride` 用于交错属性)逐行核对。
+- [x] **Step 1-3: 读代码 + 加运行时诊断**(子代理执行)——插桩 `createMesh()`,把 C++ 解码出的顶点/法线/纹理坐标/索引逐值打印,和独立 Python b3dm 解码器逐字节对比,**完全一致**。POSITION/NORMAL 共用 bufferView 靠 byteOffset 区分这处可疑点也验证正确(offset 计算无误)。**结论:`LoadSceneGLTF.cpp` 的网格/纹理解码从头到尾都是对的,原计划这里的假设不成立。**
 
-- [ ] **Step 2: 用本会话已提取的真实 accessor 结构重点核对一处可疑点**——`accessors[1]`(POSITION,bufferView 2,byteOffset 0)和 `accessors[2]`(NORMAL,bufferView 2,byteOffset **16356**)**共用同一个 bufferView**、靠 byteOffset 区分(不是交错存储,是紧密打包的两段)。确认代码处理"一个 bufferView 被多个 accessor 在不同偏移复用"这种情况时,偏移量计算正确(常见 bug 点:只用 `bufferView.byteOffset` 而忘了加 `accessor.byteOffset`,或反过来)。
+- [x] **Step 4(改写):真正根因不在这个文件里,在渲染层**——3D Tiles 图层(`Tiles3DLayer`)挂在 `sceneCamera` 下,`sceneCamera` 的 StateSet 通过 `applyToGlobe()`(`render_effects.cpp`)绑定了 `scattering_globe` 大气散射着色器(**不带 OVERRIDE**),子节点默认继承。`Tiles3DLayer` 自己没有程序 → b3dm 建筑被地球地形着色器的地表 clarity/大气混合逻辑渲染,呈现出灰白破碎的样子。这个诊断已经过独立的合规性审查子代理二次核实(读 OSG State 源码确认 OVERRIDE 语义、追了 `city_data.cpp` 的同源先例)。
 
-- [ ] **Step 3: 加临时诊断**,把解码出的头 3 个顶点坐标 + 全部顶点的实际 min/max 打印出来,和 accessor 自己声明的 `min`/`max` 对比(`accessors[1].min=[-4241.88,390.51,202.09] max=[-223.09,3177.83,1918.67]`)——对不上就是精确的解码 bug 数值证据。
+- [x] **修复**(改写):不改 `LoadSceneGLTF.cpp`(零改动,已用 `git diff` 确认),只改 `applications/earth_explorer/tiles3d_data.cpp`(+62 行)——新增一个自成一体的最小网格着色器(采样 `DiffuseMap` 单元 0 + 简单半兰伯特光照,不依赖大气 uniform),用 `OVERRIDE` 标志覆盖继承的 globe 程序。仿照 `city_data.cpp` 建筑图层的既有模式。
 
-- [ ] **Step 4: 修复确认的解码 bug。**
+- [x] **Step 5: 验证**——本地 HTTP fixture 隔离测试(走真实 `verse_web` 网络路径),修复前后对比:修复前灰白破碎无贴图,修复后有明暗层次+纹理质感(我本人用独立重新构建的环境复测确认,非仅凭报告)。**真实 API 密集区测试因当前无真实 key 权限,未执行**——见下方"仍待办"。
 
-- [ ] **Step 5: 移除临时诊断,重新构建,先跑 Task 1 隔离测试确认单瓦片干净,再跑真实密集区测试确认整体正常。**
-
-- [ ] **Step 6: 提交**
-
-```bash
-git add readerwriter/LoadSceneGLTF.cpp
-git commit -m "fix(gltf): <根据 Step 4 实际修复内容填写具体描述>"
-```
+- [x] **Step 6: 提交** —— `c0dd09ff`(未 push)。
 
 ---
 
@@ -265,29 +258,31 @@ git commit -m "fix(gltf): <根据 Step 4 实际修复内容填写具体描述>"
 
 **Files:** 无修改,仅运行验证 + 更新文档
 
-- [ ] **Step 1: 4 类历史回归 headless 批次**(复用 `tasks/lessons.md` 里已验证过的复现手法):海洋不橙、晨昏线在、倾斜不穿模、无默认程序化海洋。
+- [x] **Step 1: 4 类历史回归 headless 批次**(用修复后的二进制重跑,非沿用旧结果)——全球远视角(大气边缘辉光正常、无橙色、星空干净)、昆明区域 `EARTH_TILT=1.2` 低空倾斜(地形干净、无看穿/穿模)。截图见 `/tmp/reg_global.png`、`/tmp/reg_tilt.png`(会话产物,未提交,复现命令见上方历史记录)。
 
-- [ ] **Step 2: 与地震/航班共存检查**
+- [x] **Step 2: 与地震/航班共存检查**(用本地 fixture 代替真实 key,技术性验证)
 
 ```bash
-cd /Users/franklee/osgverse/build/sdk_core/bin
-export EARTH_3DTILES="https://data.map.gov.hk/api/3d-data/3dsd/WGS84/building/tileset.json?key=<你的真实key>"
-DYLD_LIBRARY_PATH=/Users/franklee/osgverse/build/sdk_core/lib \
-EARTH_QUAKES=1 EARTH_FLIGHTS=1 \
-EARTH_AUTOCAP=1500 EARTH_FRAME_SLEEP_MS=30 \
-./osgVerse_EarthExplorer --no-wait --resolution 1280 800 --goto 22.2803 114.1594 5 > /tmp/run_coexist.log 2>&1
-unset EARTH_3DTILES
-grep -ciE "sig_handler|handleSignal" /tmp/run_coexist.log   # 期望 0
+export EARTH_3DTILES="http://localhost:PORT/tileset.json"   # 本地 fixture,非真实 API
+EARTH_QUAKES=1 EARTH_FLIGHTS=1 EARTH_AUTOCAP=1500 EARTH_FRAME_SLEEP_MS=25 \
+./osgVerse_EarthExplorer --no-wait --resolution 1280 800 --goto 22.5425 114.2035 5
 ```
+exit 0,无崩溃,3D Tiles 图层与地震/航班开关同时开启不冲突。**注意:这只验证了"技术上不冲突",不是用真实香港建筑数据在真实密集城区做的共存验证**——那部分待真实 key。
 
-- [ ] **Step 3: 关钩子零影响复查**——不设 `EARTH_3DTILES` 跑一次,确认 `[Tiles3D]` 无任何输出、渲染与改动前一致(这条在 Phase 1 已确认过,修复不太可能影响它,但改了代码后应重新过一遍)。
+- [x] **Step 3: 关钩子零影响复查**——用修复后二进制重跑,不设 `EARTH_3DTILES`,`[Tiles3D]` 零输出,渲染正常,无崩溃。
 
-- [ ] **Step 4: 更新 `docs/superpowers/plans/2026-06-24-earth-hk-3dtiles.md` 的"实现结果"章节**,补充这次修复的根因、改动、验证证据。
+- [x] **Step 4: 更新 `docs/superpowers/plans/2026-06-24-earth-hk-3dtiles.md` 的"实现结果"章节** —— 见该文件本次更新。
 
-- [ ] **Step 5: 交给用户真机验证**——请用户在 HSBC/中环坐标交互查看,并与官方 `3d.map.gov.hk` 门户同一位置的渲染做直接对比,确认观感一致(遵循"务必肉眼验证"铁律)。
+- [ ] **Step 5: 交给用户真机验证**——**仍待办,是本计划唯一真正悬而未决的一步**。原因:①当前会话无真实香港 API key 访问权限,所有验证走的是本地 fixture(内容真实,但只是全港数据里的一个村镇低层建筑瓦片,不是密集城区);②"和官方门户直接对比"这个最终确认动作,按项目一贯做法必须由用户在真机上肉眼完成,不能由 agent 代劳。
 
 ---
 
+## 仍待办(诚实列出,不要在交接时被忽略)
+
+1. **真实 API 密集区验证**:key 到位后(或已到位),用 `EARTH_3DTILES=".../building/tileset.json?key=<key>"` 在中环/汇丰大厦等密集城区跑一次,确认修复对真实高密度、多材质、多 LOD 的场景同样有效(目前验证只覆盖了 fixture 里的沙头角单瓦片,虽然是真实数据,但复杂度低于 CBD)。
+2. **用户真机肉眼确认**:交互查看 + 和 `3d.map.gov.hk` 官方门户同位置对比,确认观感一致。
+3. **可选增强(非 bug,不阻塞)**:当前 3D Tiles 着色器是固定顶光的简单半兰伯特,不接大气散射(晨昏线/远处消隐)。若想让 3D Tiles 建筑像 `city_data.cpp` 的 OSGB 建筑一样融入大气效果,需要把 `earthRenderingUtils` 传进 `configure3DTilesLayer` 复用其大气 uniform——这是锦上添花,不是这次修复的范围。
+
 ## 已知的计划局限(诚实说明,不是占位符)
 
-Task 2A/2B 的**具体修复代码无法在此刻预先写死**——根因取决于 Task 1 的判定结果,而 Task 1 还没跑完(本会话跑了错误的代码分支,拿到的是一个需要重新验证的结果)。这份计划把"如何决定性地找到根因"和"两个分支各自的具体排查/修复路径"都写成了可直接执行的具体步骤,而不是"继续调试"这种空话——但最后一步的确切代码改动,只有 Task 1/2A-Step4/2B-Step3 拿到真实证据后才能确定。这是调试类计划相对功能开发类计划的本质区别,不是计划写得不够细。
+Task 2A/2B 的**具体修复代码无法在此刻预先写死**——根因取决于 Task 1 的判定结果。**事后证明这个局限是对的**:Task 2B 原计划假设根因在 `LoadSceneGLTF.cpp`,实际根因完全在别处(渲染层着色器继承),原计划写的"具体诊断方向"（accessor 偏移量核对）最终被验证为不成立、但验证过程本身(读代码、加运行时诊断、和独立解码器比对)是正确且必要的——这正是这份计划想要的"决定性证据驱动"效果,不是失败,是过程按预期工作。
