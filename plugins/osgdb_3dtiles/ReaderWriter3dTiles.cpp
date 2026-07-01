@@ -425,8 +425,14 @@ protected:
                                       bArray.at(8).get<double>());
                     osg::Vec3d zWidth(bArray.at(9).get<double>(), bArray.at(10).get<double>(),
                                       bArray.at(11).get<double>());
-                    result.expandBy(center); result.expandBy(center + xWidth);
-                    result.expandBy(center + yWidth); result.expandBy(center + zWidth);
+                    // Enclose all 8 corners of the oriented box (center +/- each half-axis
+                    // vector combined). The previous code only sampled 4 points (center and
+                    // the 3 positive-direction extents), which both undersizes the sphere and
+                    // drifts its center away from the box's true center for any non-cubic box.
+                    for (int sx = -1; sx <= 1; sx += 2)
+                        for (int sy = -1; sy <= 1; sy += 2)
+                            for (int sz = -1; sz <= 1; sz += 2)
+                                result.expandBy(center + xWidth * sx + yWidth * sy + zWidth * sz);
                 }
                 catch (std::exception& e)
                 { OSG_NOTICE << "[ReaderWriter3dtiles]" << e.what() << std::endl; }
