@@ -33,5 +33,11 @@ private:
     bool _historyCollapsed;    // 历史面板折叠状态（默认展开）
     size_t _lastEntryCount;    // 上次绘制时的历史条数，用于检测新增条目并自动滚动到底部
     AICardPanel _cards;
+
+    // review:confirmVideo() 返回 error（如两点还没就绪、mediaMgr 没配置好）时不能直接
+    // CloseCurrentPopup——用户看不到任何反馈，还以为点了没反应。改成在 Modal 内显示一行
+    // 红字错误，弹窗保持打开，用户可以再点一次或取消。存成员而不是局部变量：错误发生在
+    // "确认"按钮的这一帧，但要在随后的若干帧里持续显示，直到 Modal 下次打开时清空。
+    std::string _videoConfirmError;
 };
 #endif

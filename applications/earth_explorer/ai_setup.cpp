@@ -313,9 +313,13 @@ AIChatRuntime configureAIChat(const AIChatDeps& deps)
         photo.execute = [mediaPtr, maniPhoto](const picojson::value& args) {
             if (!mediaPtr)
             {
+                // review:mediaMgr 的实际构造条件是"有 EARTH_AI_KEY 或 EARTH_AI_FAKE"(见上面
+                // mediaMgr 构造处的注释),不是 EARTH_AI_FAKE_IMG——FAKE_IMG 只是构造好之后
+                // "生图这一步跳过网络"的旁路,不影响 mediaMgr 本身是否被 new 出来。文案改成
+                // 与真实判定条件一致,避免用户照着报错设了 FAKE_IMG 却发现工具依旧不可用。
                 picojson::object err;
                 err["error"] = picojson::value(std::string(
-                    "media pipeline unavailable (no EARTH_AI_KEY / EARTH_AI_FAKE_IMG)"));
+                    "media pipeline unavailable (no EARTH_AI_KEY / EARTH_AI_FAKE)"));
                 return picojson::value(err);
             }
             std::string style;
@@ -355,12 +359,22 @@ AIChatRuntime configureAIChat(const AIChatDeps& deps)
         video.execute = [mediaVideoPtr, maniVideo](const picojson::value&) {
             if (!mediaVideoPtr)
             {
+                // review:同上 generate_photo 的文案统一——mediaMgr 是否被构造只看
+                // EARTH_AI_KEY / EARTH_AI_FAKE,与 EARTH_AI_FAKE_MP4 无关。
                 picojson::object err;
                 err["error"] = picojson::value(std::string(
-                    "media pipeline unavailable (no EARTH_AI_KEY / EARTH_AI_FAKE_MP4)"));
+                    "media pipeline unavailable (no EARTH_AI_KEY / EARTH_AI_FAKE)"));
                 return picojson::value(err);
             }
-            osg::Vec3d lla = maniVideo ? maniVideo->computeEyeLatLonHeight() : osg::Vec3d();
+            // review:mani 为空时之前会静默用 (0,0,0) 当相机位姿,记录出一个错误的 A/B 点
+            // 却不报错——早退更安全,与 mediaVideoPtr 判空的处理方式一致。
+            if (!maniVideo)
+            {
+                picojson::object err;
+                err["error"] = picojson::value(std::string("earth manipulator unavailable"));
+                return picojson::value(err);
+            }
+            osg::Vec3d lla = maniVideo->computeEyeLatLonHeight();
 
             earthai::VideoPhaseKindPublic phase = mediaVideoPtr->videoPhase();
             if (phase == earthai::VIDEO_IDLE)

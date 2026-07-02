@@ -439,6 +439,20 @@ int main(int, char**)
             CHECK(p.find("km") != std::string::npos);
         }
 
+        // review 补充:北向 wrap 用例。8 方位罗盘以 0°=north 为中心、每 45° 一档,north 扇区
+        // 横跨 337.5°~360° 与 0°~22.5° 两段,取模实现(见 ai_motion.h octant 计算)最容易在
+        // 这个跨零点的边界上出错。B 点选在 A 点"正北略偏西"(经度比 A 略小、纬度显著更大),
+        // 大圆方位角 ≈349°,落在 north 扇区但不靠近 337.5° 边界(即不会因为浮点噪声误落进
+        // northwest),用来验证 wrap 逻辑而不是靠近似判断猜结果。
+        {
+            osg::Vec3d a(22.28 * kDeg, 114.17 * kDeg, 300.0);
+            osg::Vec3d b(22.40 * kDeg, 114.145 * kDeg, 300.0);
+            std::string p = earthai::buildMotionPrompt(a, b);
+            CHECK(p.find("north") != std::string::npos);
+            CHECK(p.find("northeast") == std::string::npos);
+            CHECK(p.find("northwest") == std::string::npos);
+        }
+
         std::cout << "buildMotionPrompt tests OK\n";
     }
 

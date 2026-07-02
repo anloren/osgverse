@@ -16,7 +16,9 @@ namespace earthai
     // 与 EarthManipulator::computeEyeLatLonHeight() 的返回值约定一致。
     inline std::string buildMotionPrompt(const osg::Vec3d& llaA, const osg::Vec3d& llaB)
     {
-        const double kDeg2Rad = 0.017453292519943295;
+        // review:kDeg2Rad 未被使用——输入 llaA/llaB 的纬经度本来就是弧度(与
+        // EarthManipulator::computeEyeLatLonHeight() 的返回值约定一致),函数体内所有三角
+        // 运算直接吃弧度,只有输出的 bearingDeg 需要"弧度转角度"这一个方向,故只留 kRad2Deg。
         const double kRad2Deg = 57.29577951308232;
         const double kEarthRadiusM = 6371000.0;
 

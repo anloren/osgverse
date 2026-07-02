@@ -461,8 +461,11 @@ namespace earthai
             AWAIT_CONFIRM,      // A/B 都就绪,等待用户在确认 Modal 里点「确认」
             SUBMITTING,         // 已确认,worker 线程正在提交 Veo predictLongRunning 请求
             POLLING,            // 已拿到 operation 名字,worker 线程在轮询直到 done
-            DOWNLOADING_FAKE,   // EARTH_AI_FAKE_MP4 路径的"模拟延迟"阶段(见 update() 里的 tick 判断)
-            DONE_HANDLED        // 一次性收尾,下一帧回 IDLE
+            DOWNLOADING_FAKE    // EARTH_AI_FAKE_MP4 路径的"模拟延迟"阶段(见 update() 里的 tick 判断)
+            // review:曾有 DONE_HANDLED 收尾态,但 phase 从未被赋成它——DONE/FAILED/超时
+            // 三条路径都是"处理完直接 resetVideo() 回 IDLE"(见 POLLING 分支与
+            // DOWNLOADING_FAKE 分支),不存在"下一帧再回 IDLE"这一步,枚举值和对应分支都是
+            // 死代码,已删除。
         };
 
         Phase phase = IDLE;
@@ -693,7 +696,7 @@ namespace earthai
         case VideoJob::WAIT_B:          return VIDEO_WAIT_B;
         case VideoJob::CAPTURING_B:     return VIDEO_CAPTURING_B;
         case VideoJob::AWAIT_CONFIRM:   return VIDEO_AWAIT_CONFIRM;
-        default:                        return VIDEO_RUNNING;   // SUBMITTING/POLLING/DOWNLOADING_FAKE/DONE_HANDLED
+        default:                        return VIDEO_RUNNING;   // SUBMITTING/POLLING/DOWNLOADING_FAKE
         }
     }
 
@@ -1006,6 +1009,13 @@ namespace earthai
                     v.workerJoinable = false;
                     v.pollInFlight = false;
                     v.pollDone->store(false);
+                    // review:收割完当前这一轮 worker 后立刻 return,不让本 tick 继续往下走
+                    // 到"到达轮询间隔就再 spawn 一个新 worker"那段——pollInFlight 刚清成
+                    // false、ticksSinceLastPoll 也可能恰好已经 >= kPollIntervalTicks,不加
+                    // 这个 return 就会在同一 tick 内清零又立刻重新置位,产生一个极窄的竞态
+                    // 窗口。下一 tick 才重读 job 状态、决定是否该发起下一轮轮询,只是多等
+                    // 一帧(可忽略的延迟),换来这个竞态彻底消失。
+                    return;
                 }
             }
 
@@ -1023,6 +1033,11 @@ namespace earthai
 
             if (v.pollTicks > kPollTimeoutTicks)
             {
+                // review:这里的 join() 有可能阻塞主线程——但最多只会阻塞"一个 HTTP 往返"
+                // 的时长(worker 里单次 poll() 顶多是一次 30s 轮询 GET 或一次 60s 下载 GET,
+                // 见 VeoVideoProvider::poll() 的实现),不是无界等待。10 分钟超时本身极小
+                // 概率触发(正常任务远早于此完成),这里为了状态机简单直接同步 join,
+                // 权衡后可接受,不做成异步收尾。
                 if (v.workerJoinable && v.worker.joinable()) v.worker.join();
                 _jobs.update(v.jobId, AIJob::FAILED, 1.0f, "", "polling timeout (10min)");
                 if (_cards) _cards->removeJob(v.jobId);
@@ -1082,12 +1097,6 @@ namespace earthai
                 jobsPtr->update(jobId, AIJob::DONE, 1.0f, mp4Path, "");
             });
             v.workerJoinable = true;
-            return;
-        }
-
-        if (v.phase == VideoJob::DONE_HANDLED)
-        {
-            resetVideo();
             return;
         }
     }

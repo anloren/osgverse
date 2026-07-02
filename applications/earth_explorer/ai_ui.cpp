@@ -233,7 +233,10 @@ void AIChatUI::draw(earthai::AIChatCore* core, earthai::MediaManager* media, osg
     if (media)
     {
         if (openVideoModal && !ImGui::IsPopupOpen(u8"确认生成巡航视频"))
+        {
             ImGui::OpenPopup(u8"确认生成巡航视频");
+            _videoConfirmError.clear();   // 每次重新打开 Modal 清空上一轮遗留的错误文案
+        }
 
         ImGuiIO& ioModal = ImGui::GetIO();
         ImGui::SetNextWindowPos(ImVec2(ioModal.DisplaySize.x * 0.5f, ioModal.DisplaySize.y * 0.5f),
@@ -260,14 +263,26 @@ void AIChatUI::draw(earthai::AIChatCore* core, earthai::MediaManager* media, osg
                 {
                     picojson::value r = media->confirmVideo();
                     OSG_NOTICE << "[AIChat] video confirm -> " << r.serialize() << std::endl;
-                    ImGui::CloseCurrentPopup();
+                    // review:失败（error 字段非空）时不关弹窗——用户需要看到出了什么问题，
+                    // 而不是弹窗悄悄消失、状态却没推进。错误文案存进成员，下面单独一行画出来。
+                    if (r.is<picojson::object>() && r.get("error").is<std::string>())
+                        _videoConfirmError = r.get("error").get<std::string>();
+                    else
+                        ImGui::CloseCurrentPopup();
                 }
                 ImGui::SameLine();
                 if (ImGui::Button(u8"取消", ImVec2(80.0f, 0.0f)) ||
                     ImGui::IsKeyPressed(ImGuiKey_Escape))
                 {
                     media->cancelVideo();
+                    _videoConfirmError.clear();
                     ImGui::CloseCurrentPopup();
+                }
+                if (!_videoConfirmError.empty())
+                {
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.35f, 0.35f, 1.0f));
+                    ImGui::TextWrapped(u8"错误：%s", _videoConfirmError.c_str());
+                    ImGui::PopStyleColor();
                 }
             }
             else
