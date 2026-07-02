@@ -258,7 +258,7 @@ namespace
             {
                 picojson::object hist;
                 hist["<2km"] = picojson::value(0.0); hist["2-8km"] = picojson::value(0.0);
-                hist[">8km"] = picojson::value(0.0);
+                hist[">=8km"] = picojson::value(0.0);
                 r["altHistogram"] = picojson::value(hist);
                 return picojson::value(r).serialize();
             }
@@ -274,7 +274,7 @@ namespace
             }
             picojson::object hist;
             hist["<2km"] = picojson::value((double)nLow); hist["2-8km"] = picojson::value((double)nMid);
-            hist[">8km"] = picojson::value((double)nHigh);
+            hist[">=8km"] = picojson::value((double)nHigh);
             r["altHistogram"] = picojson::value(hist);
             const Flight& fastest = _flights[fastestIdx];
             r["fastestCallsign"] = picojson::value(fastest.callsign);
