@@ -66,6 +66,14 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
+# 8.5) 若打包环境设置了 EARTH_AI_KEY,注入 LSEnvironment 使双击启动也能读到
+#      (dist/ 在 .gitignore,key 只进本地产物;脚本本身不含任何密钥)
+if [ -n "$EARTH_AI_KEY" ]; then
+    /usr/libexec/PlistBuddy -c "Add :LSEnvironment dict" "$APP/Contents/Info.plist" 2>/dev/null || true
+    /usr/libexec/PlistBuddy -c "Add :LSEnvironment:EARTH_AI_KEY string $EARTH_AI_KEY" "$APP/Contents/Info.plist" 2>/dev/null ||     /usr/libexec/PlistBuddy -c "Set :LSEnvironment:EARTH_AI_KEY $EARTH_AI_KEY" "$APP/Contents/Info.plist"
+    echo "[info] EARTH_AI_KEY injected into app LSEnvironment"
+fi
+
 # 9) ad-hoc 代码签名
 codesign --force --deep --sign - "$APP" 2>/dev/null || echo "[warn] codesign skipped"
 

@@ -79,6 +79,23 @@ namespace earthai
         std::string _apiKey, _model;
     };
 
+    // Omni(Interactions API,/v1beta/interactions)单图+提示词**同步**生视频。
+    // 模型名含 "omni" 时 MediaManager::confirmVideo 走此路径而非 Veo predictLongRunning。
+    // 官方明确:Omni 不支持首尾帧插值(video interpolation)——B 点画面不上传,
+    // 只通过运动提示词参与;要严格首尾帧穿越请 EARTH_AI_VIDEO_MODEL 切回 veo-3.1-*。
+    class OmniVideoProvider
+    {
+    public:
+        OmniVideoProvider(const std::string& apiKey, const std::string& model);
+        // 同步调用(worker 线程,可能耗时 30-180s):成功返回 true 并填 mp4Bytes;
+        // 失败返回 false 并填 err。响应里视频可能是 steps[].content[] 的 base64,
+        // 也可能是 output_video.uri(需再 GET 下载),两种形状都处理。
+        bool generate(const std::string& firstPngBytes, const std::string& motionPrompt,
+                      std::string& mp4Bytes, std::string& err);
+    private:
+        std::string _apiKey, _model;
+    };
+
     // videoPhase() 的返回类型,给 UI 判断三态按钮/是否弹 Modal 用。放 MediaManager 类外
     // 是因为 ai_ui.cpp 需要在头文件之外看到这个类型名,且 MediaManager 类体内(下方)
     // 就要用到它作为 videoPhase() 的返回类型,必须先声明。

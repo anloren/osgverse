@@ -256,7 +256,9 @@ void AIChatUI::draw(earthai::AIChatCore* core, earthai::MediaManager* media, osg
                 ImGui::TextWrapped("%s", info.motionPrompt.c_str());
                 ImGui::Separator();
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.75f, 0.3f, 1.0f));
-                ImGui::TextWrapped(u8"将调用 Veo 生成 8 秒视频，约 $2-6，确认？");
+                ImGui::TextWrapped(u8"将提交视频生成(默认 Omni Flash,同步、较快;"
+                                   u8"EARTH_AI_VIDEO_MODEL=veo-3.1-* 可换首尾帧穿越模式,约 $1-6/条)。"
+                                   u8"此操作计费,确认?");
                 ImGui::PopStyleColor();
 
                 if (ImGui::Button(u8"确认生成", ImVec2(120.0f, 0.0f)))

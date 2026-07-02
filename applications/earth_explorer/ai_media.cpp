@@ -213,8 +213,15 @@ namespace earthai
         req->method = HTTP_POST;
         req->timeout = 60;   // 生图比对话慢,给足 60s(spec 要求)
         // 注意:key 拼在 URL 里,下面任何日志/错误信息都不得把 req->url 整串打印出来
-        req->url = "https://generativelanguage.googleapis.com/v1beta/models/"
-                   "gemini-2.5-flash-image:generateContent?key=" + _apiKey;
+        // 生图模型:EARTH_AI_IMAGE_MODEL 覆盖,默认 nano-banana-pro-preview(2026-07 真机 key
+        // 实测该 key 的生图模型只有 banana pro,无 "2 lite";老 gemini-2.5-flash-image 仍在,
+        // 需要时可 env 切回)。
+        static const std::string kImageModel = []() {
+            const char* e = getenv("EARTH_AI_IMAGE_MODEL");
+            return (e && *e) ? std::string(e) : std::string("nano-banana-pro-preview");
+        }();
+        req->url = "https://generativelanguage.googleapis.com/v1beta/models/" +
+                   kImageModel + ":generateContent?key=" + _apiKey;
         req->headers["Content-Type"] = "application/json";
         req->body = picojson::value(body).serialize();
 
@@ -383,6 +390,96 @@ namespace earthai
         err = "video object has neither bytesBase64Encoded nor uri: " + truncate200(resp->body);
     }
 
+    // ---------------- OmniVideoProvider(Interactions API)----------------
+
+    OmniVideoProvider::OmniVideoProvider(const std::string& apiKey, const std::string& model)
+        : _apiKey(apiKey), _model(model) {}
+
+    bool OmniVideoProvider::generate(const std::string& firstPngBytes, const std::string& motionPrompt,
+                                     std::string& mp4Bytes, std::string& err)
+    {
+        std::string b64 = hv::Base64Encode((const unsigned char*)firstPngBytes.data(),
+                                           (unsigned int)firstPngBytes.size());
+        picojson::object imgPart, txtPart;
+        imgPart["type"] = picojson::value(std::string("image"));
+        imgPart["data"] = picojson::value(b64);
+        imgPart["mime_type"] = picojson::value(std::string("image/png"));
+        txtPart["type"] = picojson::value(std::string("text"));
+        txtPart["text"] = picojson::value(motionPrompt);
+        picojson::array input;
+        input.push_back(picojson::value(imgPart));
+        input.push_back(picojson::value(txtPart));
+
+        picojson::object respFmt; respFmt["type"] = picojson::value(std::string("video"));
+        picojson::object body;
+        body["model"] = picojson::value(_model);
+        body["input"] = picojson::value(input);
+        body["response_format"] = picojson::value(respFmt);
+
+        requests::Request req(new HttpRequest);
+        req->method = HTTP_POST;
+        req->timeout = 300;   // Interactions 同步返回,官方 3-10s 视频通常 30-180s 内出结果
+        // 注意:key 拼在 URL 里,任何日志/错误信息都不得把 req->url 整串打印出来
+        req->url = "https://generativelanguage.googleapis.com/v1beta/interactions?key=" + _apiKey;
+        req->headers["Content-Type"] = "application/json";
+        req->body = picojson::value(body).serialize();
+
+        requests::Response resp = requests::request(req);
+        if (!resp || resp->status_code != 200)
+        {
+            err = "HTTP " + std::to_string(resp ? (int)resp->status_code : -1) +
+                  (resp ? (": " + truncate200(resp->body)) : "");
+            return false;
+        }
+
+        picojson::value v; std::string perr = picojson::parse(v, resp->body);
+        if (!perr.empty() || !v.is<picojson::object>()) { err = "bad json: " + truncate200(resp->body); return false; }
+
+        // 形状 1:steps[] 里 type=="model_output" 的 content[] 中 type=="video" 的 data(base64)
+        if (v.contains("steps") && v.get("steps").is<picojson::array>())
+        {
+            picojson::array& steps = v.get("steps").get<picojson::array>();
+            for (size_t i = 0; i < steps.size(); ++i)
+            {
+                if (!steps[i].is<picojson::object>() || !steps[i].contains("content")) continue;
+                if (steps[i].contains("type") && steps[i].get("type").to_str() != "model_output") continue;
+                picojson::value& c = steps[i].get("content");
+                if (!c.is<picojson::array>()) continue;
+                picojson::array& parts = c.get<picojson::array>();
+                for (size_t j = 0; j < parts.size(); ++j)
+                {
+                    if (!parts[j].is<picojson::object>()) continue;
+                    if (parts[j].contains("type") && parts[j].get("type").to_str() == "video"
+                        && parts[j].contains("data"))
+                    {
+                        std::string vb64 = parts[j].get("data").to_str();
+                        mp4Bytes = hv::Base64Decode(vb64.c_str(), (unsigned int)vb64.size());
+                        if (!mp4Bytes.empty()) return true;
+                    }
+                }
+            }
+        }
+        // 形状 2:大文件走 output_video.uri,需再 GET 下载(uri 通常要拼 key 参数)
+        if (v.contains("output_video") && v.get("output_video").is<picojson::object>()
+            && v.get("output_video").contains("uri"))
+        {
+            std::string uri = v.get("output_video").get("uri").to_str();
+            std::string sep = (uri.find('?') == std::string::npos) ? "?" : "&";
+            requests::Request dl(new HttpRequest);
+            dl->method = HTTP_GET; dl->timeout = 180;
+            dl->url = uri + sep + "key=" + _apiKey;   // 同样不得整串打印
+            requests::Response dresp = requests::request(dl);
+            if (dresp && dresp->status_code == 200 && !dresp->body.empty())
+            { mp4Bytes = dresp->body; return true; }
+            err = "uri download HTTP " + std::to_string(dresp ? (int)dresp->status_code : -1);
+            return false;
+        }
+        // 都没有:带出 status / error 信息
+        std::string status = v.contains("status") ? v.get("status").to_str() : "";
+        err = "no video in response (status=" + status + "): " + truncate200(resp->body);
+        return false;
+    }
+
     // ---------------- MediaManager ----------------
 
     // 输出目录:EARTH_AI_OUTDIR 覆盖,默认 $HOME/Pictures/EarthExplorer(仅算一次,
@@ -439,14 +536,15 @@ namespace earthai
         return has;
     }
 
-    // Veo 模型名:EARTH_AI_VIDEO_MODEL 覆盖。默认 fast 变体(真机 key 实测 2026-07:该 key 可见
-    // veo-3.1-{generate,fast-generate,lite-generate}-preview,无 -001 GA 名;fast 约省一半费用,
-    // 追求画质可 env 换 veo-3.1-generate-preview)。(与 EARTH_AI_MODEL
-    // 是两个独立配置项——对话模型与视频模型通常不是同一个)。
+    // 视频模型名:EARTH_AI_VIDEO_MODEL 覆盖。默认 Omni Flash(Interactions API,同步、快、
+    // 支持对话式编辑;但官方明确不支持首尾帧插值——B 点只进运动提示词)。要严格的
+    // 首尾帧穿越效果请设 EARTH_AI_VIDEO_MODEL=veo-3.1-fast-generate-preview(或去掉 fast
+    // 的高画质版;真机 key 实测 2026-07 无 -001 GA 名)。模型名含 "omni" 走 Interactions,
+    // 否则走 Veo predictLongRunning(见 confirmVideo 分支)。
     static std::string videoModel()
     {
         const char* env = getenv("EARTH_AI_VIDEO_MODEL");
-        return (env && *env) ? std::string(env) : std::string("veo-3.1-fast-generate-preview");
+        return (env && *env) ? std::string(env) : std::string("gemini-omni-flash-preview");
     }
 
     // WAITING_SNAPSHOT 状态下 update() 的超时阈值(见类头注释与 update() 里的判定)。
@@ -795,8 +893,11 @@ namespace earthai
             int jobId = _video->jobId;
             JobManager* jobsPtr = &_jobs;
 
+            bool useOmni = (model.find("omni") != std::string::npos);
+            std::string mp4Path = _video->mp4Path;
+
             if (_video->workerJoinable && _video->worker.joinable()) _video->worker.join();
-            _video->worker = std::thread([snapA, snapB, prompt, apiKey, model, jobId, jobsPtr]()
+            _video->worker = std::thread([snapA, snapB, prompt, apiKey, model, jobId, jobsPtr, useOmni, mp4Path]()
             {
                 std::string actualA = capturedPath(snapA), actualB = capturedPath(snapB);
                 std::string bytesA, bytesB;
@@ -804,6 +905,32 @@ namespace earthai
                     || !readFileBytes(actualB, bytesB) || bytesB.empty())
                 {
                     jobsPtr->update(jobId, AIJob::FAILED, 1.0f, "", "failed to read A/B snapshot files");
+                    return;
+                }
+
+                if (useOmni)
+                {
+                    // Omni(Interactions API):同步一步到位——A 帧+运动提示词进模型,直接拿回
+                    // mp4 字节(B 帧不上传:官方不支持首尾帧插值,B 点已折进 prompt)。
+                    // 无 operation 概念,worker 内直接写盘并把 job 置 DONE;主线程 SUBMITTING
+                    // 分支的 DONE 检查负责收尾(推卡片/清状态),不进入 POLLING。
+                    OmniVideoProvider provider(apiKey, model);
+                    std::string err, mp4Bytes;
+                    bool ok = false;
+                    try { ok = provider.generate(bytesA, prompt, mp4Bytes, err); }
+                    catch (const std::exception& e) { err = std::string("provider exception: ") + e.what(); }
+                    if (!ok || mp4Bytes.empty())
+                    {
+                        jobsPtr->update(jobId, AIJob::FAILED, 1.0f, "",
+                                        err.empty() ? "omni generate failed" : err);
+                        return;
+                    }
+                    if (!writeFileBytes(mp4Path, mp4Bytes))
+                    {
+                        jobsPtr->update(jobId, AIJob::FAILED, 1.0f, "", "failed to write " + mp4Path);
+                        return;
+                    }
+                    jobsPtr->update(jobId, AIJob::DONE, 1.0f, mp4Path, "");
                     return;
                 }
 
@@ -934,6 +1061,19 @@ namespace earthai
         {
             AIJob snap;
             if (!_jobs.get(v.jobId, snap)) { resetVideo(); return; }
+            // Omni 同步路径:worker 一步到位直接置 DONE(mp4 已写盘),这里收尾。
+            if (snap.status == AIJob::DONE)
+            {
+                if (v.workerJoinable && v.worker.joinable()) v.worker.join();
+                v.workerJoinable = false;
+                if (_cards) { _cards->removeJob(v.jobId); _cards->pushPhoto(snap.resultPath, u8"巡航视频", true); }
+                OSG_NOTICE << "[AIChat] video job done -> " << snap.resultPath << std::endl;
+                resetVideo();
+                return;
+            }
+            // Omni 同步生成 30-180s,SUBMITTING 阶段爬一点进度让 Job 卡不像卡死
+            // (creepProgress 锁内只在 RUNNING 时推进,不会覆盖 worker 写的终态)。
+            _jobs.creepProgress(v.jobId, std::min(0.85f, snap.progress + 0.0008f));
             if (snap.status == AIJob::FAILED)
             {
                 if (v.workerJoinable && v.worker.joinable()) v.worker.join();

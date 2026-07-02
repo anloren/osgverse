@@ -428,7 +428,7 @@ AIChatRuntime configureAIChat(const AIChatDeps& deps)
     {
         const char* m = getenv("EARTH_AI_MODEL");
         earthai::GeminiProvider* gp = new earthai::GeminiProvider(
-            aiKey, (m && *m) ? m : "gemini-2.5-flash");
+            aiKey, (m && *m) ? m : "gemini-3.5-flash");
         gp->setSystemPrompt(u8"你是 EarthExplorer 三维地球应用的中文助手。优先使用提供的工具完成用户请求；"
                             u8"用户提到地名时自行换算经纬度；回答保持简洁；不要编造工具没有返回的数据。");
         aiCore = new earthai::AIChatCore(gp, aiRegistry);
