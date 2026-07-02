@@ -74,7 +74,8 @@ namespace earthai
         // 仅测试用:导出当前 _history 序列化后的 Gemini contents JSON,
         // 供单测校验 functionCall/functionResponse 严格配对;业务代码不要调用
         std::string historyContentsForTest() const;
-        std::string systemPrompt;                        // 中文系统提示词,earth_main 里设置
+        // 注:系统提示词不在这里设置——请调用 GeminiProvider::setSystemPrompt(),
+        // AIChatCore 本身不读取/不转发任何 systemPrompt 字段。
 
     private:
         void startWorkerRound();   // 内部:基于当前 _history 拼 contents,起一轮工作线程

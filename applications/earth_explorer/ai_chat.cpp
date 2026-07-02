@@ -333,7 +333,15 @@ namespace earthai
     // 从响应体里尽量挖出人类可读的错误摘要(promptFeedback.blockReason 或顶层 error.message),
     // 截到 200 字符——body 本身可能很长(base64/大段文本),错误提示没必要塞爆日志/UI。
     static std::string truncate200(const std::string& s)
-    { return s.size() > 200 ? s.substr(0, 200) : s; }
+    {
+        if (s.size() <= 200) return s;
+        std::string r = s.substr(0, 200);
+        // UTF-8 修补:硬切可能切在多字节字符中间,先去掉残缺的续字节(10xxxxxx),
+        // 再去掉一个孤立的多字节首字节(11xxxxxx),避免输出乱码尾巴。
+        while (!r.empty() && ((unsigned char)r.back() & 0xC0) == 0x80) r.pop_back();
+        if (!r.empty() && (unsigned char)r.back() >= 0xC0) r.pop_back();
+        return r;
+    }
 
     LLMTurn parseGeminiResponse(const std::string& body)
     {

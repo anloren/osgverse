@@ -23,6 +23,8 @@
 #include "precip_data.h"
 #include "flight_data.h"
 #include "tiles3d_data.h"
+#include "ai_tools.h"
+#include "ai_chat.h"
 #include <VerseCommon.h>
 #include <iostream>
 #include <sstream>
@@ -624,6 +626,124 @@ int main(int argc, char** argv)
         const char* tEnv = getenv("EARTH_3DTILES");
         if (tEnv && *tEnv) t3->enabled = (std::string(tEnv) != "0");
         layerMgr.setEnabled("hk3d", t3->enabled);
+    }
+
+    // ---- AI Chat（spec: docs/superpowers/specs/2026-07-02-earth-ai-chat-design.md）----
+    // 无 EARTH_AI_KEY 且无 EARTH_AI_FAKE → aiCore 为空，后续全部跳过，零影响。
+    // registry/aiCore 用裸指针、进程生命周期存活，与本文件其余单例/裸 new 风格一致。
+    earthai::ToolRegistry* aiRegistry = new earthai::ToolRegistry;
+    earthai::AIChatCore* aiCore = nullptr;
+    {
+        earthai::Tool fly; fly.name = "fly_to";
+        fly.description = u8"把相机飞到指定经纬度与高度。用户说地名时你自己换算经纬度。";
+        fly.parametersJson = "{\"type\":\"object\",\"properties\":{"
+            "\"lat\":{\"type\":\"number\"},\"lon\":{\"type\":\"number\"},"
+            "\"alt_km\":{\"type\":\"number\",\"description\":\"default 50\"}},"
+            "\"required\":[\"lat\",\"lon\"]}";
+        osgVerse::EarthManipulator* mani = earthManipulator.get();
+        fly.execute = [mani](const picojson::value& a) {
+            double lat = a.get("lat").get<double>(), lon = a.get("lon").get<double>();
+            double alt = a.contains("alt_km") ? a.get("alt_km").get<double>() : 50.0;
+            mani->setByEye(osg::inDegrees(lat), osg::inDegrees(lon), alt * 1000.0);
+            OSG_NOTICE << "[AIChat] fly_to " << lat << "," << lon << "," << alt << "km" << std::endl;
+            picojson::object r; r["ok"] = picojson::value(true); return picojson::value(r);
+        };
+        aiRegistry->add(fly);
+
+        earthai::Tool setLayer; setLayer.name = "set_layer";
+        setLayer.description = u8"开关或调整一个数据图层。可用 id："
+            u8"labels(路网·地名)、clouds(GIBS 影像/云图)、precip(降水雷达)、"
+            u8"quakes(实时地震)、flights(实时航班)、hk3d(香港实景三维)。"
+            u8"opacity 仅对支持透明度的图层有效（可选，0-1）。";
+        setLayer.parametersJson = "{\"type\":\"object\",\"properties\":{"
+            "\"id\":{\"type\":\"string\"},\"enabled\":{\"type\":\"boolean\"},"
+            "\"opacity\":{\"type\":\"number\"}},\"required\":[\"id\",\"enabled\"]}";
+        LayerManager* lmptr = &layerMgr;
+        setLayer.execute = [lmptr](const picojson::value& a) {
+            std::string id = a.get("id").get<std::string>();
+            bool enabled = a.get("enabled").get<bool>();
+            OverlayLayer* l = lmptr->find(id);
+            if (!l)
+            {
+                std::string avail;
+                std::vector<OverlayLayer>& all = lmptr->layers();
+                for (size_t i = 0; i < all.size(); ++i) avail += (i ? "," : "") + all[i].id;
+                picojson::object err;
+                err["error"] = picojson::value("unknown layer id " + id + ", available: " + avail);
+                return picojson::value(err);
+            }
+            if (!l->apply)   // "base" 底图常开、无开关动作
+            {
+                picojson::object err; err["error"] = picojson::value("layer not togglable");
+                return picojson::value(err);
+            }
+            lmptr->setEnabled(id, enabled);
+            if (a.contains("opacity") && l->hasOpacity)
+                lmptr->setOpacity(id, (float)a.get("opacity").get<double>());
+            OSG_NOTICE << "[AIChat] set_layer " << id << " " << (enabled ? "on" : "off") << std::endl;
+            picojson::object r;
+            r["ok"] = picojson::value(true); r["layer"] = picojson::value(id);
+            r["enabled"] = picojson::value(enabled);
+            return picojson::value(r);
+        };
+        aiRegistry->add(setLayer);
+
+        earthai::Tool viewState; viewState.name = "get_view_state";
+        viewState.description = u8"读取当前相机的经纬度/高度，以及各图层开关状态。";
+        viewState.parametersJson = "{\"type\":\"object\",\"properties\":{}}";
+        osgVerse::EarthManipulator* maniV = earthManipulator.get();
+        viewState.execute = [maniV, lmptr](const picojson::value&) {
+            // 与 EarthControlUI「相机 Camera」小节同一取值方式：computeEyeLatLonHeight()
+            // 返回 (纬度弧度, 经度弧度, 高度米)。
+            osg::Vec3d lla = maniV->computeEyeLatLonHeight();
+            picojson::object r;
+            r["lat"] = picojson::value(osg::RadiansToDegrees(lla[0]));
+            r["lon"] = picojson::value(osg::RadiansToDegrees(lla[1]));
+            r["alt_km"] = picojson::value(lla[2] / 1000.0);
+            picojson::object layersObj;
+            std::vector<OverlayLayer>& all = lmptr->layers();
+            for (size_t i = 0; i < all.size(); ++i)
+                layersObj[all[i].id] = picojson::value(all[i].enabled);
+            r["layers"] = picojson::value(layersObj);
+            OSG_NOTICE << "[AIChat] get_view_state" << std::endl;
+            return picojson::value(r);
+        };
+        aiRegistry->add(viewState);
+    }
+    const char* aiKey = getenv("EARTH_AI_KEY");
+    const char* aiFake = getenv("EARTH_AI_FAKE");
+    if (aiFake && *aiFake)
+    {
+        earthai::FakeProvider* fp = new earthai::FakeProvider;
+        if (!fp->loadFromFile(aiFake)) OSG_WARN << "[AIChat] bad fake script: " << aiFake << std::endl;
+        aiCore = new earthai::AIChatCore(fp, aiRegistry);
+    }
+    else if (aiKey && *aiKey)
+    {
+        const char* m = getenv("EARTH_AI_MODEL");
+        earthai::GeminiProvider* gp = new earthai::GeminiProvider(
+            aiKey, (m && *m) ? m : "gemini-2.5-flash");
+        gp->setSystemPrompt(u8"你是 EarthExplorer 三维地球应用的中文助手。优先使用提供的工具完成用户请求；"
+                            u8"用户提到地名时自行换算经纬度；回答保持简洁；不要编造工具没有返回的数据。");
+        aiCore = new earthai::AIChatCore(gp, aiRegistry);
+    }
+    if (aiCore)
+    {
+        // FRAME drain（工具必须主线程执行；与降水层 FRAME handler 同模式）
+        class AIFrameHandler : public osgGA::GUIEventHandler
+        {
+            earthai::AIChatCore* _core;
+        public:
+            AIFrameHandler(earthai::AIChatCore* c) : _core(c) {}
+            virtual bool handle(const osgGA::GUIEventAdapter& ea, osgGA::GUIActionAdapter&)
+            {
+                if (ea.getEventType() == osgGA::GUIEventAdapter::FRAME) _core->drainMainThread();
+                return false;
+            }
+        };
+        viewer.addEventHandler(new AIFrameHandler(aiCore));
+        const char* autoSubmit = getenv("EARTH_AI_AUTOSUBMIT");   // headless E2E 用
+        if (autoSubmit && *autoSubmit) aiCore->submit(autoSubmit);
     }
 
     // ImGui 控制面板 — 挂到最终 HUD 相机（cameras[3]），确保在地球图像之上绘制
