@@ -37,6 +37,18 @@ namespace earthai
         return true;
     }
 
+    // grab(pngPath) 的实际落盘文件:去掉 ".png" 再拼 ScreenCaptureHandler 的 "_0.png" 后缀。
+    // 此逻辑曾在 grab/ready/照片提交三处各写一份,视频提交第四份拷贝时把后缀直接追加到
+    // ".png" 之后酿成真机 bug(离线 FAKE 路径跳过读快照,测不到)—— 统一收敛到这里。
+    static std::string capturedPath(const std::string& pngPath)
+    {
+        std::string prefix = pngPath;
+        const std::string ext = ".png";
+        if (prefix.size() >= ext.size() && prefix.compare(prefix.size() - ext.size(), ext.size(), ext) == 0)
+            prefix.resize(prefix.size() - ext.size());
+        return prefix + "_0.png";
+    }
+
     static bool writeFileBytes(const std::string& path, const std::string& bytes)
     {
         std::ofstream ofs(path.c_str(), std::ios::binary | std::ios::trunc);
@@ -91,12 +103,8 @@ namespace earthai
     bool SnapshotGrabber::ready(const std::string& pngPath)
     {
         // WriteToFile 用 "_0" 后缀(单 GraphicsContext、OVERWRITE 策略)拼实际文件名,
-        // 与 grab() 里去掉 ".png" 再拼前缀的逻辑对应。
-        std::string prefix = pngPath;
-        const std::string ext = ".png";
-        if (prefix.size() >= ext.size() && prefix.compare(prefix.size() - ext.size(), ext.size(), ext) == 0)
-            prefix.resize(prefix.size() - ext.size());
-        std::string actual = prefix + "_0.png";
+        // 统一经 capturedPath() 计算,与提交侧读取路径保持一致。
+        std::string actual = capturedPath(pngPath);
 
         // 写盘是渲染线程在捕获回调里做的,文件可能"存在但还没写完"——真正的跨帧稳定性:
         // 本次测到的大小要与"上一次 ready() 调用"记录的大小相同才算稳定,而不是同一次调用
@@ -599,12 +607,7 @@ namespace earthai
             }
 
             std::string snapBytes;
-            // 实际磁盘文件名带 "_0" 后缀(见 SnapshotGrabber::ready 注释)。
-            std::string actual = _snapPath;
-            const std::string ext = ".png";
-            if (actual.size() >= ext.size() && actual.compare(actual.size() - ext.size(), ext.size(), ext) == 0)
-                actual.resize(actual.size() - ext.size());
-            actual += "_0.png";
+            std::string actual = capturedPath(_snapPath);
 
             if (!readFileBytes(actual, snapBytes) || snapBytes.empty())
             {
@@ -795,7 +798,7 @@ namespace earthai
             if (_video->workerJoinable && _video->worker.joinable()) _video->worker.join();
             _video->worker = std::thread([snapA, snapB, prompt, apiKey, model, jobId, jobsPtr]()
             {
-                std::string actualA = snapA + "_0.png", actualB = snapB + "_0.png";
+                std::string actualA = capturedPath(snapA), actualB = capturedPath(snapB);
                 std::string bytesA, bytesB;
                 if (!readFileBytes(actualA, bytesA) || bytesA.empty()
                     || !readFileBytes(actualB, bytesB) || bytesB.empty())
