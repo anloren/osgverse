@@ -431,12 +431,14 @@ namespace earthai
         return has;
     }
 
-    // Veo 模型名:EARTH_AI_VIDEO_MODEL 覆盖,默认 veo-3.1-generate-001(与 EARTH_AI_MODEL
+    // Veo 模型名:EARTH_AI_VIDEO_MODEL 覆盖。默认 fast 变体(真机 key 实测 2026-07:该 key 可见
+    // veo-3.1-{generate,fast-generate,lite-generate}-preview,无 -001 GA 名;fast 约省一半费用,
+    // 追求画质可 env 换 veo-3.1-generate-preview)。(与 EARTH_AI_MODEL
     // 是两个独立配置项——对话模型与视频模型通常不是同一个)。
     static std::string videoModel()
     {
         const char* env = getenv("EARTH_AI_VIDEO_MODEL");
-        return (env && *env) ? std::string(env) : std::string("veo-3.1-generate-001");
+        return (env && *env) ? std::string(env) : std::string("veo-3.1-fast-generate-preview");
     }
 
     // WAITING_SNAPSHOT 状态下 update() 的超时阈值(见类头注释与 update() 里的判定)。

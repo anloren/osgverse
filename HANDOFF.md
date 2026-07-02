@@ -46,7 +46,7 @@
 |---|---|
 | `EARTH_AI_KEY` | Gemini API key,设置后 AI 对话真正可用(未设置且无 `EARTH_AI_FAKE` 时,AI 相关代码路径完全不激活,行为与无此功能时一致) |
 | `EARTH_AI_MODEL` | 对话模型覆盖,默认 `gemini-2.5-flash` |
-| `EARTH_AI_VIDEO_MODEL` | 视频模型覆盖,默认 `veo-3.1-generate-001` |
+| `EARTH_AI_VIDEO_MODEL` | 视频模型覆盖,默认 `veo-3.1-fast-generate-preview`(真机 key 实测无 -001 GA 名;高画质换 `veo-3.1-generate-preview`) |
 | `EARTH_AI_FAKE=<script.json>` | 离线 E2E:脚本化多轮 function-call 对话,不联网、不需要 key(见 `test/ai_fake_*.json`) |
 | `EARTH_AI_FAKE_IMG=<png路径>` | 离线 E2E:`generate_photo` 的生图步骤替换成拷贝该文件字节 |
 | `EARTH_AI_FAKE_MP4=<mp4路径>` | 离线 E2E:`confirmVideo` 的提交+轮询+下载整段替换成拷贝该文件字节 |
