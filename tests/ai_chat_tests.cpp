@@ -13,6 +13,9 @@
 // ai_chat.cpp 目前没有独立的 CMake 目标可链接进测试可执行文件(NEW_TEST 宏只接受单个源文件),
 // 为了不改动测试的链接规则,这里直接 #include 实现文件把它编译进本测试的翻译单元。
 #include "../applications/earth_explorer/ai_chat.cpp"
+// Task 9:buildMotionPrompt 是 header-only 纯函数(只依赖 osg/Vec3d + string + cmath),
+// 不像 ai_media.cpp 那样拖 osgViewer/libhv 等重依赖,可以直接 include 到测试翻译单元。
+#include "../applications/earth_explorer/ai_motion.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -375,5 +378,51 @@ int main(int, char**)
     }
 
     std::cout << "ai_chat tests OK\n";
+
+    // ---- buildMotionPrompt(Task 9,纯函数,header-only ai_motion.h)----
+    {
+        const double kDeg = 0.017453292519943295;   // 度→弧度,与 osg::DegreesToRadians 等价
+
+        // TST(22.298,114.172,500m) 尖沙咀 -> (22.281,114.158,200m) 中环:
+        // 大圆方位角 ≈217.3°(落在 southwest 罗盘扇区),高度 500m->200m 下降。
+        {
+            osg::Vec3d a(22.298 * kDeg, 114.172 * kDeg, 500.0);
+            osg::Vec3d b(22.281 * kDeg, 114.158 * kDeg, 200.0);
+            std::string p = earthai::buildMotionPrompt(a, b);
+            CHECK(p.find("southwest") != std::string::npos);
+            CHECK(p.find("descending") != std::string::npos);
+            CHECK(p.find("500") != std::string::npos);
+            CHECK(p.find("200") != std::string::npos);
+        }
+
+        // 起终点完全相同 -> 无方向意义的移动,高度也不变 -> "holding"
+        {
+            osg::Vec3d a(22.3 * kDeg, 114.17 * kDeg, 300.0);
+            osg::Vec3d b(22.3 * kDeg, 114.17 * kDeg, 300.0);
+            std::string p = earthai::buildMotionPrompt(a, b);
+            CHECK(p.find("holding") != std::string::npos);
+        }
+
+        // 上升案例:B 点高度显著高于 A 点 -> "ascending"
+        {
+            osg::Vec3d a(22.28 * kDeg, 114.15 * kDeg, 100.0);
+            osg::Vec3d b(22.30 * kDeg, 114.20 * kDeg, 800.0);
+            std::string p = earthai::buildMotionPrompt(a, b);
+            CHECK(p.find("ascending") != std::string::npos);
+            CHECK(p.find("100") != std::string::npos);
+            CHECK(p.find("800") != std::string::npos);
+        }
+
+        // 距离数字确实出现在提示词里(1 位小数格式),粗略检查含小数点。
+        {
+            osg::Vec3d a(22.298 * kDeg, 114.172 * kDeg, 500.0);
+            osg::Vec3d b(22.281 * kDeg, 114.158 * kDeg, 200.0);
+            std::string p = earthai::buildMotionPrompt(a, b);
+            CHECK(p.find("km") != std::string::npos);
+        }
+
+        std::cout << "buildMotionPrompt tests OK\n";
+    }
+
     return 0;
 }

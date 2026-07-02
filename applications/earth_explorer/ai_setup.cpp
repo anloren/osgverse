@@ -44,16 +44,34 @@ static earthai::Tool makeSummaryTool(const std::string& name, const std::string&
 // 在另一个线程跑，若开局第 0 帧就 submit，AI 工具可能在 fixture/网络数据落地
 // 之前就查询到空结果——用 EARTH_AI_AUTOSUBMIT_DELAY_FRAMES（默认 0，立即提交）
 // 推迟到第 N 帧再提交，给数据同步（syncIfDirty，主线程 update 遍历）留出时间。
+//
+// 测试专用:EARTH_AI_VIDEO_AUTOTEST=1(见 update() 里的 _videoAutotest 分支)——headless
+// E2E 没法真的点 UI 按钮/在确认 Modal 里点「确认」，用这个钩子在固定帧数程序化地走一遍
+// beginVideoCapture → captureVideoEnd → confirmVideo，绕开 UI 但复用完全相同的
+// MediaManager 状态机（因此仍然验证了真实状态机，只是跳过了鼠标点击这一步）。
+// 只在环境变量设置时激活，不影响正常运行路径。
 class AIFrameHandler : public osgGA::GUIEventHandler
 {
     earthai::AIChatCore* _core;
-    earthai::MediaManager* _media;   // 可为 null(无 key 且无 EARTH_AI_FAKE_IMG)
+    earthai::MediaManager* _media;   // 可为 null(无 key 且无 EARTH_AI_FAKE_IMG/EARTH_AI_FAKE)
+    osgVerse::EarthManipulator* _mani;
     std::string _autoSubmitText; int _delayFrames; int _frameCount; bool _fired;
+
+    bool _videoAutotest;             // EARTH_AI_VIDEO_AUTOTEST=1
+    int _videoFrameCount;
+    bool _videoBeganA, _videoCapturedB, _videoConfirmed;
 public:
     AIFrameHandler(earthai::AIChatCore* c, earthai::MediaManager* media,
+                   osgVerse::EarthManipulator* mani,
                    const std::string& autoSubmitText, int delayFrames)
-        : _core(c), _media(media), _autoSubmitText(autoSubmitText), _delayFrames(delayFrames),
-          _frameCount(0), _fired(false) {}
+        : _core(c), _media(media), _mani(mani), _autoSubmitText(autoSubmitText), _delayFrames(delayFrames),
+          _frameCount(0), _fired(false),
+          _videoAutotest(false), _videoFrameCount(0),
+          _videoBeganA(false), _videoCapturedB(false), _videoConfirmed(false)
+    {
+        const char* env = getenv("EARTH_AI_VIDEO_AUTOTEST");
+        _videoAutotest = (env && *env && std::string(env) != "0");
+    }
     virtual bool handle(const osgGA::GUIEventAdapter& ea, osgGA::GUIActionAdapter&)
     {
         if (ea.getEventType() == osgGA::GUIEventAdapter::FRAME)
@@ -63,6 +81,34 @@ public:
             if (!_fired && !_autoSubmitText.empty() && _frameCount >= _delayFrames)
             { _core->submit(_autoSubmitText); _fired = true; }
             if (!_fired) ++_frameCount;
+
+            // ---- EARTH_AI_VIDEO_AUTOTEST 钩子(测试专用,仅当环境变量设置时激活)----
+            if (_videoAutotest && _media && _mani)
+            {
+                ++_videoFrameCount;
+                if (!_videoBeganA && _videoFrameCount >= 60)
+                {
+                    osg::Vec3d llaA = _mani->computeEyeLatLonHeight();
+                    _media->beginVideoCapture(llaA);
+                    _videoBeganA = true;
+                }
+                else if (_videoBeganA && !_videoCapturedB && _videoFrameCount >= 120)
+                {
+                    osg::Vec3d llaB = _mani->computeEyeLatLonHeight();
+                    if (_media->captureVideoEnd(llaB)) _videoCapturedB = true;
+                    // captureVideoEnd 要求 phase==WAIT_B(A 点快照已稳定);若 A 点还没稳定
+                    // (WAIT_A),这里会返回 false,下一帧再试——不推进 _videoCapturedB。
+                }
+                else if (_videoCapturedB && !_videoConfirmed
+                         && _media->videoPhase() == earthai::VIDEO_AWAIT_CONFIRM)
+                {
+                    // 绕过确认 Modal(headless 无法点击),直接调 confirmVideo() ——
+                    // 与真实 UI 按钮调用的是同一个函数,状态机本身没有被绕过。
+                    picojson::value r = _media->confirmVideo();
+                    OSG_NOTICE << "[AIChat] video autotest confirm -> " << r.serialize() << std::endl;
+                    _videoConfirmed = true;
+                }
+            }
         }
         return false;
     }
@@ -291,6 +337,67 @@ AIChatRuntime configureAIChat(const AIChatDeps& deps)
             return r;
         };
         aiRegistry->add(photo);
+
+        // generate_video(Task 9):自然语言路径与 🎬 按钮共用同一套两点采集 + 确认 Modal
+        // 状态机(MediaManager 的 videoPhase()/beginVideoCapture()/captureVideoEnd()),
+        // 工具本身绝不跳过确认弹窗——即使是模型自主调用,也只推进"记录 A 点"/"记录 B 点"
+        // 两步,真正提交(花钱)那一步永远要用户在 Modal 里点「确认」(confirmVideo() 由
+        // ai_ui.cpp 的 Modal 按钮调用,这里不调用)。
+        earthai::Tool video; video.name = "generate_video";
+        video.description = u8"生成一段首尾帧巡航视频(Veo):记录当前相机位置为起点 A,"
+            u8"提示用户移动相机到目标位置后再次调用本工具记录终点 B,"
+            u8"两点都记录后会弹出确认框(涉及费用,约 $2-6),用户确认后才真正开始生成。"
+            u8"本工具从不跳过确认框。";
+        video.parametersJson = "{\"type\":\"object\",\"properties\":{"
+            "\"style\":{\"type\":\"string\",\"description\":\"预留:风格描述(暂未使用)\"}}}";
+        earthai::MediaManager* mediaVideoPtr = mediaMgr;
+        osgVerse::EarthManipulator* maniVideo = mani;
+        video.execute = [mediaVideoPtr, maniVideo](const picojson::value&) {
+            if (!mediaVideoPtr)
+            {
+                picojson::object err;
+                err["error"] = picojson::value(std::string(
+                    "media pipeline unavailable (no EARTH_AI_KEY / EARTH_AI_FAKE_MP4)"));
+                return picojson::value(err);
+            }
+            osg::Vec3d lla = maniVideo ? maniVideo->computeEyeLatLonHeight() : osg::Vec3d();
+
+            earthai::VideoPhaseKindPublic phase = mediaVideoPtr->videoPhase();
+            if (phase == earthai::VIDEO_IDLE)
+            {
+                bool ok = mediaVideoPtr->beginVideoCapture(lla);
+                picojson::object r;
+                if (!ok) { r["error"] = picojson::value(std::string("failed to start video capture")); return picojson::value(r); }
+                r["status"] = picojson::value(std::string("awaiting_second_point"));
+                r["note"] = picojson::value(std::string(
+                    u8"已记录起点,请移动相机到目标点后点击视频按钮完成,或再次调用本工具"));
+                OSG_NOTICE << "[AIChat] generate_video tool -> awaiting_second_point" << std::endl;
+                return picojson::value(r);
+            }
+            if (phase == earthai::VIDEO_WAIT_B)
+            {
+                bool ok = mediaVideoPtr->captureVideoEnd(lla);
+                picojson::object r;
+                if (!ok) { r["error"] = picojson::value(std::string("failed to capture second point")); return picojson::value(r); }
+                r["status"] = picojson::value(std::string("awaiting_confirmation"));
+                r["note"] = picojson::value(std::string(
+                    u8"两点已记录,请在弹出的确认框中确认(涉及费用)"));
+                OSG_NOTICE << "[AIChat] generate_video tool -> awaiting_confirmation" << std::endl;
+                return picojson::value(r);
+            }
+            // 其它阶段(A 点/B 点还在抓帧稳定中、已等待确认、或已确认在生成中):
+            // 明确告知模型当前状态,不做任何状态转换——避免工具在瞬态阶段被重复调用时
+            // 产生意外跳转(例如正在等确认时又把 B 点覆盖掉)。
+            picojson::object r;
+            const char* phaseName =
+                (phase == earthai::VIDEO_WAIT_A) ? "capturing_first_point" :
+                (phase == earthai::VIDEO_CAPTURING_B) ? "capturing_second_point" :
+                (phase == earthai::VIDEO_AWAIT_CONFIRM) ? "awaiting_confirmation" : "running";
+            r["status"] = picojson::value(std::string(phaseName));
+            r["note"] = picojson::value(std::string(u8"视频流程正在进行中,请稍候或在界面上操作"));
+            return picojson::value(r);
+        };
+        aiRegistry->add(video);
     }
     const char* aiKey = getenv("EARTH_AI_KEY");
     const char* aiFake = getenv("EARTH_AI_FAKE");
@@ -317,7 +424,7 @@ AIChatRuntime configureAIChat(const AIChatDeps& deps)
         const char* autoSubmit = getenv("EARTH_AI_AUTOSUBMIT");   // headless E2E 用
         const char* delayEnv = getenv("EARTH_AI_AUTOSUBMIT_DELAY_FRAMES");
         int delayFrames = (delayEnv && *delayEnv) ? atoi(delayEnv) : 0;
-        viewer.addEventHandler(new AIFrameHandler(aiCore, mediaMgr,
+        viewer.addEventHandler(new AIFrameHandler(aiCore, mediaMgr, mani,
             (autoSubmit && *autoSubmit) ? autoSubmit : "", delayFrames));
     }
     runtime.core = aiCore;

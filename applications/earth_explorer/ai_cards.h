@@ -13,8 +13,12 @@ struct AICard
 {
     enum Type { CHART, PHOTO, JOB } type = CHART;
     picojson::value spec;     // CHART: {type,title,labels[],values[]}
-    std::string path;         // PHOTO:生成图 PNG 路径;JOB:未用
+    std::string path;         // PHOTO:生成图 PNG(或 Task 9 生成视频 mp4)路径;JOB:未用
     std::string title;        // PHOTO/JOB 标题(CHART 标题取自 spec.title,见 drawCards)
+    // Task 9:巡航视频完成后复用 PHOTO 卡类型展示(标题"巡航视频" + 「打开」按钮,同样是
+    // system("open '<path>'"))——没有必要为视频单独定义一种卡片类型,只用这个 bool 区分
+    // "打开"按钮的提示文案(纯展示差异)。默认 false,不影响既有照片卡行为。
+    bool isVideo = false;
     // JOB:每帧从这里读实时进度(而非在卡片里缓存一份易过期的快照);
     // pushJob() 时传入,drawJobCard() 里 jobs->get(jobId,...) 轮询。
     earthai::JobManager* jobs = nullptr;
@@ -43,7 +47,9 @@ public:
     // 主线程调用(工具 execute 在 drain 中,与 draw() 同线程,无需加锁——见 .cpp 头注释)。
     void pushChart(const picojson::value& spec);
     // Task 8:生图任务完成后调用,pngPath 为生成结果文件的绝对路径。
-    void pushPhoto(const std::string& pngPath, const std::string& title);
+    // Task 9:isVideo=true 时同一张卡展示"打开"为播放视频语义(仅提示文案不同,
+    // 系统调用仍是 open,由操作系统按扩展名派发给默认播放器)。
+    void pushPhoto(const std::string& pngPath, const std::string& title, bool isVideo = false);
     // Task 8:任务刚起步时调用,进度条实时从 jobs->get(jobId,...) 读取;
     // MediaManager::update() 检测到该 job DONE/FAILED 时应调用 removeJob(jobId) 收尾
     // (DONE 一般紧接着调 pushPhoto 展示结果,FAILED 直接移除、错误已走 OSG_WARN)。

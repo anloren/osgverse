@@ -6,6 +6,7 @@
 #include <string>
 
 namespace earthai { class MediaManager; }
+namespace osgVerse { class EarthManipulator; }
 
 // 底部悬浮聊天条：输入框 + 历史面板（历史在输入行上方，同一窗口内）+ 右上角卡片堆叠
 // (卡片存储/绘制委托给 AICardPanel，见 ai_cards.h)。
@@ -15,7 +16,10 @@ class AIChatUI
 public:
     AIChatUI();
     // media 为空(未配置 key/EARTH_AI_FAKE_IMG)时📷按钮保持禁用态,其余不受影响。
-    void draw(earthai::AIChatCore* core, earthai::MediaManager* media = nullptr);
+    // mani(Task 9):🎬 按钮记录 A/B 两点位姿需要读当前相机经纬度/高度
+    // (EarthManipulator::computeEyeLatLonHeight());为空时🎬按钮保持禁用态。
+    void draw(earthai::AIChatCore* core, earthai::MediaManager* media = nullptr,
+              osgVerse::EarthManipulator* mani = nullptr);
 
     // 主线程调用(工具 execute 在 drain 中,与 draw() 同线程,无需加锁——见 ai_cards.cpp 头注释)。
     // 转发给 _cards,保留原有调用方(ai_setup.cpp 的 show_chart 工具)不必改动。

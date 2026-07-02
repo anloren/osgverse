@@ -20,10 +20,10 @@ void AICardPanel::pushChart(const picojson::value& spec)
     _cards.push_back(c);
 }
 
-// 由 MediaManager::update() 在生图 Job 完成(DONE)时调用,主线程同源(见上方注释),无需加锁。
-void AICardPanel::pushPhoto(const std::string& pngPath, const std::string& title)
+// 由 MediaManager::update() 在生图/生视频 Job 完成(DONE)时调用,主线程同源(见上方注释),无需加锁。
+void AICardPanel::pushPhoto(const std::string& pngPath, const std::string& title, bool isVideo)
 {
-    AICard c; c.type = AICard::PHOTO; c.path = pngPath; c.title = title; c.open = true;
+    AICard c; c.type = AICard::PHOTO; c.path = pngPath; c.title = title; c.isVideo = isVideo; c.open = true;
     c.serial = _nextSerial++;
     _cards.push_back(c);
 }
@@ -394,9 +394,11 @@ void AICardPanel::drawChartCard(const picojson::value& spec, float width)
     else drawBarChart(dl, origin, width, labels, values);   // 默认/未知类型按 bar 处理
 }
 
-// ---- 照片卡(Task 8):文件名 + 「打开」按钮,用系统默认查看器打开(macOS `open`)。----
-// 缩略图故意跳过:ImGui 需要把 PNG 解码上传成 GL 纹理再画 image()——这条纹理管线在本文件
-// (纯 ImDrawList 手绘,零额外依赖)里没有现成基础设施,留给后续任务按需补。
+// ---- 照片/视频卡(Task 8 照片 + Task 9 视频复用同一种卡片):文件名 + 「打开」按钮,
+// 用系统默认查看器/播放器打开(macOS `open`,按文件扩展名自动派发给图片查看器或
+// QuickTime/系统默认播放器,PNG/MP4 都不需要额外处理)。----
+// 缩略图/视频预览帧故意跳过:ImGui 需要把图像解码上传成 GL 纹理再画 image()——这条纹理
+// 管线在本文件(纯 ImDrawList 手绘,零额外依赖)里没有现成基础设施,留给后续任务按需补。
 static std::string basename(const std::string& path)
 {
     size_t slash = path.find_last_of("/\\");
@@ -416,7 +418,9 @@ void AICardPanel::drawPhotoCard(const AICard& c)
         // macOS `open`;路径用单引号包住防止空格/特殊字符断开命令(与 spec 约定一致)。
         std::string cmd = "open '" + c.path + "'";
         int rc = system(cmd.c_str());
-        if (rc != 0) OSG_WARN << "[AIChat] open photo failed, rc=" << rc << " path=" << c.path << std::endl;
+        if (rc != 0)
+            OSG_WARN << "[AIChat] open " << (c.isVideo ? "video" : "photo")
+                     << " failed, rc=" << rc << " path=" << c.path << std::endl;
     }
 }
 

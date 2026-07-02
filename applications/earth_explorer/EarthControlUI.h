@@ -280,7 +280,7 @@ struct EarthControlUI : public osgVerse::ImGuiContentHandler
         }
 
         // ===== 底部 AI 对话条:独立浮窗,底部居中锚定,不与左上角/右上角面板重叠 =====
-        if (_aiUI) _aiUI->draw(_aiCore, _aiMedia);
+        if (_aiUI) _aiUI->draw(_aiCore, _aiMedia, _mani);
 
         if (font) ImGui::PopFont();
     }
