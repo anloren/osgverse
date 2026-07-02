@@ -323,6 +323,12 @@ namespace earthai
                 errObj["error"] = picojson::value("tool threw: " + truncate200(ex.what()));
                 result = picojson::value(errObj);
             }
+            catch (...)
+            {
+                picojson::object errObj;
+                errObj["error"] = picojson::value("tool threw: unknown exception");
+                result = picojson::value(errObj);
+            }
 
             std::string note = u8"⚙ " + fc.name + "(" + fc.args.serialize() + ")";
             std::lock_guard<std::mutex> g(_mutex);

@@ -20,6 +20,9 @@ public:
     virtual void setViewBBox(double latMin, double lonMin, double latMax, double lonMax) = 0; // 主线程每帧设
     virtual FlightInfo getSelected() const = 0;
     virtual void clearSelected() = 0;
+    // 汇总统计(供 AI 工具 get_flights_summary 用):当前视口内航班数、高度分桶、最快航班。
+    // 注意覆盖范围随视口变化(OpenSky bbox 查询),JSON 字段见 flight_data.cpp 实现注释。
+    virtual std::string summaryJson() const = 0;
 };
 
 extern osg::Node* configureFlightLayer(osgViewer::View& viewer, osg::Node* earthRoot,

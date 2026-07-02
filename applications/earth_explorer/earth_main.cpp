@@ -644,6 +644,12 @@ int main(int argc, char** argv)
         fly.execute = [mani](const picojson::value& a) {
             double lat = a.get("lat").get<double>(), lon = a.get("lon").get<double>();
             double alt = a.contains("alt_km") ? a.get("alt_km").get<double>() : 50.0;
+            if (lat < -90 || lat > 90 || lon < -180 || lon > 180 || alt <= 0.0)
+            {
+                picojson::object err;
+                err["error"] = picojson::value("out of range: lat[-90,90] lon[-180,180] alt_km>0");
+                return picojson::value(err);
+            }
             mani->setByEye(osg::inDegrees(lat), osg::inDegrees(lon), alt * 1000.0);
             OSG_NOTICE << "[AIChat] fly_to " << lat << "," << lon << "," << alt << "km" << std::endl;
             picojson::object r; r["ok"] = picojson::value(true); return picojson::value(r);
@@ -679,17 +685,22 @@ int main(int argc, char** argv)
             }
             lmptr->setEnabled(id, enabled);
             if (a.contains("opacity") && l->hasOpacity)
-                lmptr->setOpacity(id, (float)a.get("opacity").get<double>());
+            {
+                float op = osg::clampBetween((float)a.get("opacity").get<double>(), 0.0f, 1.0f);
+                lmptr->setOpacity(id, op);
+            }
             OSG_NOTICE << "[AIChat] set_layer " << id << " " << (enabled ? "on" : "off") << std::endl;
             picojson::object r;
             r["ok"] = picojson::value(true); r["layer"] = picojson::value(id);
             r["enabled"] = picojson::value(enabled);
+            r["opacity"] = picojson::value((double)l->opacity);
             return picojson::value(r);
         };
         aiRegistry->add(setLayer);
 
         earthai::Tool viewState; viewState.name = "get_view_state";
-        viewState.description = u8"读取当前相机的经纬度/高度，以及各图层开关状态。";
+        viewState.description = u8"读取当前相机的经纬度/高度，以及各图层开关状态。"
+            u8"单位：lat/lon 为度，alt_km 为千米。";
         viewState.parametersJson = "{\"type\":\"object\",\"properties\":{}}";
         osgVerse::EarthManipulator* maniV = earthManipulator.get();
         viewState.execute = [maniV, lmptr](const picojson::value&) {
@@ -709,6 +720,73 @@ int main(int argc, char** argv)
             return picojson::value(r);
         };
         aiRegistry->add(viewState);
+
+        // get_quakes_summary:地震数据汇总(总数/最大震级/震级直方图/近24h数量)。
+        // 图层若未开启,先自动开启(触发 USGS 抓取 + 图层可见),数据可能还没到——
+        // 这与 set_layer 手动开关走同一条 LayerManager::setEnabled 路径,主线程内安全。
+        earthai::Tool quakeSummary; quakeSummary.name = "get_quakes_summary";
+        quakeSummary.description = u8"查询当前地震数据汇总：总数、最大震级(及地点/时间)、"
+            u8"震级直方图(<3/3-4/4-5/5-6/>=6)、过去24小时内数量。"
+            u8"数据来自 USGS 实时地震流；若地震层尚未开启会自动开启并开始抓取，"
+            u8"此时返回的 count 可能为 0，代表数据仍在加载中，可稍后再查询一次。";
+        quakeSummary.parametersJson = "{\"type\":\"object\",\"properties\":{}}";
+        LayerManager* lmptrQ = &layerMgr;
+        QuakeLayer* qSummaryPtr = quakeLayer;
+        quakeSummary.execute = [lmptrQ, qSummaryPtr](const picojson::value&) {
+            if (!qSummaryPtr)
+            {
+                picojson::object err; err["error"] = picojson::value("quake layer unavailable");
+                return picojson::value(err);
+            }
+            if (!qSummaryPtr->isEnabled()) lmptrQ->setEnabled("quakes", true);   // 懒开启,触发抓取
+            std::string json = qSummaryPtr->summaryJson();
+            picojson::value v; std::string perr = picojson::parse(v, json);
+            if (!perr.empty() || !v.is<picojson::object>())
+            {
+                picojson::object err; err["error"] = picojson::value("bad summary json: " + perr);
+                return picojson::value(err);
+            }
+            picojson::object& obj = v.get<picojson::object>();
+            double n = obj.count("count") ? obj["count"].get<double>() : 0.0;
+            if (n <= 0.0)
+                obj["note"] = picojson::value(std::string(u8"地震层已自动开启，数据抓取中，请稍后再查询一次"));
+            OSG_NOTICE << "[AIChat] get_quakes_summary count=" << (long long)n << std::endl;
+            return picojson::value(obj);
+        };
+        aiRegistry->add(quakeSummary);
+
+        // get_flights_summary:当前视口内航班数据汇总(数量/高度分桶/最快航班)。
+        earthai::Tool flightSummary; flightSummary.name = "get_flights_summary";
+        flightSummary.description = u8"查询当前视口内航班数据汇总：航班数量、高度分桶"
+            u8"(<2km/2-8km/>8km)、最快航班(呼号+速度)。"
+            u8"数据来自 OpenSky 实时航班流，覆盖范围随相机视口变化（非全球总数）；"
+            u8"若航班层尚未开启会自动开启并开始抓取，此时返回的 count 可能为 0，"
+            u8"代表数据仍在加载中，可稍后再查询一次。";
+        flightSummary.parametersJson = "{\"type\":\"object\",\"properties\":{}}";
+        LayerManager* lmptrF = &layerMgr;
+        FlightLayer* fSummaryPtr = flightLayer;
+        flightSummary.execute = [lmptrF, fSummaryPtr](const picojson::value&) {
+            if (!fSummaryPtr)
+            {
+                picojson::object err; err["error"] = picojson::value("flight layer unavailable");
+                return picojson::value(err);
+            }
+            if (!fSummaryPtr->isEnabled()) lmptrF->setEnabled("flights", true);   // 懒开启,触发抓取
+            std::string json = fSummaryPtr->summaryJson();
+            picojson::value v; std::string perr = picojson::parse(v, json);
+            if (!perr.empty() || !v.is<picojson::object>())
+            {
+                picojson::object err; err["error"] = picojson::value("bad summary json: " + perr);
+                return picojson::value(err);
+            }
+            picojson::object& obj = v.get<picojson::object>();
+            double n = obj.count("count") ? obj["count"].get<double>() : 0.0;
+            if (n <= 0.0)
+                obj["note"] = picojson::value(std::string(u8"航班层已自动开启，数据抓取中，请稍后再查询一次"));
+            OSG_NOTICE << "[AIChat] get_flights_summary count=" << (long long)n << std::endl;
+            return picojson::value(obj);
+        };
+        aiRegistry->add(flightSummary);
     }
     const char* aiKey = getenv("EARTH_AI_KEY");
     const char* aiFake = getenv("EARTH_AI_FAKE");
@@ -729,21 +807,36 @@ int main(int argc, char** argv)
     }
     if (aiCore)
     {
-        // FRAME drain（工具必须主线程执行；与降水层 FRAME handler 同模式）
+        // FRAME drain（工具必须主线程执行；与降水层 FRAME handler 同模式）。
+        // 同时承担 EARTH_AI_AUTOSUBMIT 的延迟提交：数据类图层（地震/航班）的抓取线程
+        // 在另一个线程跑，若开局第 0 帧就 submit，AI 工具可能在 fixture/网络数据落地
+        // 之前就查询到空结果——用 EARTH_AI_AUTOSUBMIT_DELAY_FRAMES（默认 0，立即提交）
+        // 推迟到第 N 帧再提交，给数据同步（syncIfDirty，主线程 update 遍历）留出时间。
         class AIFrameHandler : public osgGA::GUIEventHandler
         {
             earthai::AIChatCore* _core;
+            std::string _autoSubmitText; int _delayFrames; int _frameCount; bool _fired;
         public:
-            AIFrameHandler(earthai::AIChatCore* c) : _core(c) {}
+            AIFrameHandler(earthai::AIChatCore* c, const std::string& autoSubmitText, int delayFrames)
+                : _core(c), _autoSubmitText(autoSubmitText), _delayFrames(delayFrames),
+                  _frameCount(0), _fired(false) {}
             virtual bool handle(const osgGA::GUIEventAdapter& ea, osgGA::GUIActionAdapter&)
             {
-                if (ea.getEventType() == osgGA::GUIEventAdapter::FRAME) _core->drainMainThread();
+                if (ea.getEventType() == osgGA::GUIEventAdapter::FRAME)
+                {
+                    _core->drainMainThread();
+                    if (!_fired && !_autoSubmitText.empty() && _frameCount >= _delayFrames)
+                    { _core->submit(_autoSubmitText); _fired = true; }
+                    ++_frameCount;
+                }
                 return false;
             }
         };
-        viewer.addEventHandler(new AIFrameHandler(aiCore));
         const char* autoSubmit = getenv("EARTH_AI_AUTOSUBMIT");   // headless E2E 用
-        if (autoSubmit && *autoSubmit) aiCore->submit(autoSubmit);
+        const char* delayEnv = getenv("EARTH_AI_AUTOSUBMIT_DELAY_FRAMES");
+        int delayFrames = (delayEnv && *delayEnv) ? atoi(delayEnv) : 0;
+        viewer.addEventHandler(new AIFrameHandler(aiCore,
+            (autoSubmit && *autoSubmit) ? autoSubmit : "", delayFrames));
     }
 
     // ImGui 控制面板 — 挂到最终 HUD 相机（cameras[3]），确保在地球图像之上绘制

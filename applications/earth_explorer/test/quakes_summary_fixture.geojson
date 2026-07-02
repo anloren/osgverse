@@ -1,0 +1,20 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": { "mag": 2.5, "place": "Small Test near Reno", "time": 1718900000000, "url": "https://earthquake.usgs.gov/sq1" },
+      "geometry": { "type": "Point", "coordinates": [-119.8, 39.5, 5.0] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "mag": 4.2, "place": "Mid Test near Taipei", "time": 1718890000000, "url": "https://earthquake.usgs.gov/sq2" },
+      "geometry": { "type": "Point", "coordinates": [121.56, 25.03, 30.0] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "mag": 6.1, "place": "Large Test near Manila", "time": 1782970597595, "url": "https://earthquake.usgs.gov/sq3" },
+      "geometry": { "type": "Point", "coordinates": [120.98, 14.6, 80.0] }
+    }
+  ]
+}

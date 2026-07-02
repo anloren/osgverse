@@ -24,6 +24,9 @@ public:
     virtual bool isEnabled() const = 0;
     virtual QuakeInfo getSelected() const = 0;  // 点击选中的地震(valid=false 表示无)
     virtual void clearSelected() = 0;
+    // 汇总统计(供 AI 工具 get_quakes_summary 用):总数、最大震级(+地点/时间)、
+    // 震级直方图、近 24h 数量。JSON 字符串,字段见 quake_data.cpp 实现注释。
+    virtual std::string summaryJson() const = 0;
 };
 
 // 构建地震层场景节点。返回挂到 sceneCamera 的 osg::Group;

@@ -17,6 +17,7 @@
 #include "3rdparty/libhv/all/client/requests.h"
 #include <fstream>
 #include <sstream>
+#include <ctime>
 #include "quake_data.h"
 
 namespace
@@ -304,6 +305,54 @@ namespace
 
         // 仅主线程读(syncIfDirty 在 update 遍历写;Task 5 拾取在事件处理读,同主线程)。
         const std::vector<Quake>& quakes() const { return _quakes; }
+
+        // 汇总统计,供 AI 工具 get_quakes_summary 调用。_quakes 只在主线程写(syncIfDirty,
+        // update 遍历),AIChatCore::drainMainThread 也在主线程(FRAME handler)调用本方法,
+        // 因此这里直接读 _quakes 是安全的,不需要额外加锁。
+        // 图层未开启或数据尚未到达时 _quakes 为空,返回 count=0(不是错误)。
+        virtual std::string summaryJson() const
+        {
+            picojson::object r;
+            r["count"] = picojson::value((double)_quakes.size());
+            if (_quakes.empty())
+            {
+                r["maxMag"] = picojson::value(0.0);
+                picojson::object hist;
+                hist["<3"] = picojson::value(0.0); hist["3-4"] = picojson::value(0.0);
+                hist["4-5"] = picojson::value(0.0); hist["5-6"] = picojson::value(0.0);
+                hist[">=6"] = picojson::value(0.0);
+                r["magHistogram"] = picojson::value(hist);
+                r["last24h"] = picojson::value(0.0);
+                return picojson::value(r).serialize();
+            }
+
+            int nLt3 = 0, n34 = 0, n45 = 0, n56 = 0, nGe6 = 0, nLast24h = 0;
+            int maxIdx = 0;
+            long long nowMs = (long long)time(nullptr) * 1000LL;
+            const long long kDayMs = 24LL * 3600LL * 1000LL;
+            for (size_t i = 0; i < _quakes.size(); ++i)
+            {
+                double m = _quakes[i].mag;
+                if (m < 3.0) ++nLt3;
+                else if (m < 4.0) ++n34;
+                else if (m < 5.0) ++n45;
+                else if (m < 6.0) ++n56;
+                else ++nGe6;
+                if (m > _quakes[maxIdx].mag) maxIdx = (int)i;
+                if (nowMs - _quakes[i].timeMs < kDayMs) ++nLast24h;
+            }
+            const Quake& mx = _quakes[maxIdx];
+            r["maxMag"] = picojson::value(mx.mag);
+            r["maxMagPlace"] = picojson::value(mx.place);
+            r["maxMagTimeMs"] = picojson::value((double)mx.timeMs);
+            picojson::object hist;
+            hist["<3"] = picojson::value((double)nLt3); hist["3-4"] = picojson::value((double)n34);
+            hist["4-5"] = picojson::value((double)n45); hist["5-6"] = picojson::value((double)n56);
+            hist[">=6"] = picojson::value((double)nGe6);
+            r["magHistogram"] = picojson::value(hist);
+            r["last24h"] = picojson::value((double)nLast24h);
+            return picojson::value(r).serialize();
+        }
 
         osg::Group* buildScene()
         {

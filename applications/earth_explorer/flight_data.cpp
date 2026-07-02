@@ -244,6 +244,44 @@ namespace
 
         osg::Group* root() { return _root; }
 
+        // 汇总统计,供 AI 工具 get_flights_summary 调用。_flights 只在主线程写(syncIfDirty,
+        // update 遍历),AIChatCore::drainMainThread 也在主线程(FRAME handler)调用本方法,
+        // 因此这里直接读 _flights 是安全的,不需要额外加锁(同 quake_data.cpp summaryJson 的约定)。
+        // 覆盖范围随当前视口变化(OpenSky bbox 查询),不是全球航班总数;图层未开启或数据尚未
+        // 到达时 _flights 为空,返回 count=0(不是错误)。
+        virtual std::string summaryJson() const
+        {
+            picojson::object r;
+            r["count"] = picojson::value((double)_flights.size());
+            r["note"] = picojson::value(std::string(u8"覆盖范围为当前视口(OpenSky bbox 查询),非全球总数"));
+            if (_flights.empty())
+            {
+                picojson::object hist;
+                hist["<2km"] = picojson::value(0.0); hist["2-8km"] = picojson::value(0.0);
+                hist[">8km"] = picojson::value(0.0);
+                r["altHistogram"] = picojson::value(hist);
+                return picojson::value(r).serialize();
+            }
+
+            int nLow = 0, nMid = 0, nHigh = 0, fastestIdx = 0;
+            for (size_t i = 0; i < _flights.size(); ++i)
+            {
+                double altKm = _flights[i].altM / 1000.0;
+                if (altKm < 2.0) ++nLow;
+                else if (altKm < 8.0) ++nMid;
+                else ++nHigh;
+                if (_flights[i].velMS > _flights[fastestIdx].velMS) fastestIdx = (int)i;
+            }
+            picojson::object hist;
+            hist["<2km"] = picojson::value((double)nLow); hist["2-8km"] = picojson::value((double)nMid);
+            hist[">8km"] = picojson::value((double)nHigh);
+            r["altHistogram"] = picojson::value(hist);
+            const Flight& fastest = _flights[fastestIdx];
+            r["fastestCallsign"] = picojson::value(fastest.callsign);
+            r["fastestSpeedMS"] = picojson::value(fastest.velMS);
+            return picojson::value(r).serialize();
+        }
+
         // 后台线程交付新快照(加锁)。
         void postSnapshot(const std::vector<Flight>& fs)
         { OpenThreads::ScopedLock<OpenThreads::Mutex> lk(_mutex); _pending = fs; _dirty = true; }
