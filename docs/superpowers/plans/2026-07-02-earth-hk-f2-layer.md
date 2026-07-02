@@ -54,3 +54,18 @@ Esri World Imagery = `https://server.arcgisonline.com/ArcGIS/rest/services/World
 验证:TST 效果图 = f2 建筑站平整地面、维港岸线干净、背景九龙群山(bbox 外)保留;
 flatdem on/off/on 三连跑正常退出(其间一次 SIGBUS 为 teardown 偶发抖动,与改动无关,
 静态析构期 libosg 内部 map,复现 0/3)。
+
+## 追加 2(同日)— 硬切 bbox 造成"漏空壳",改为羽化压平本地瓦片
+
+真机反馈:山接壤处漏空的壳,下面能看到正常场景 → 硬切 bbox(z>=12 空路径)造成
+平坦子瓦片 vs 真实高程父/邻瓦片的百米落差,**与滇池看穿孔洞同族,不该重犯**。
+
+改法:`gen_hk_flat_dem.py` 预生成 z8-15 全层级"羽化压平"瓦片(核心区压平到 ≤6m,
+向外 ~1.2km smoothstep 过渡回原始高程;所有层级同一函数 → 父子 LOD 与内外邻接由
+构造保证一致)。162 张 PNG(8.8MB)入 `assets/models/Earth/hk_dem/`,随构建/打包自动
+分发;`createCustomPath` ELEVATION 分支发现本地瓦片存在即替代 AWS(z>15 祖先规则命中
+本地 z15,烘焙机制不变);`EARTH_HK_FLATDEM=0` 仍可关。
+
+真机警告噪声定性(非崩溃原因):[LoaderGLTF] BIN 对齐吐槽(每 f2 瓦片一条,无害)、
+GIBS 404(既有)、imgui 退出提示。**用户报告的崩溃未复现/未定位**——已知一次 teardown
+SIGBUS(退出阶段静态析构,复现 0/3);若用户是拖动中崩,需其终端日志再查。

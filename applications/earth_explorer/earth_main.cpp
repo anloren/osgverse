@@ -4,6 +4,7 @@
 #include <osg/Texture2D>
 #include <osg/MatrixTransform>
 #include <osgDB/Archive>
+#include <osgDB/FileUtils>
 #include <osgDB/ReadFile>
 #include <osgDB/WriteFile>
 #include <osgGA/StateSetManipulator>
@@ -196,6 +197,9 @@ protected:
 static const std::string kTerrariumUrl =
     "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
 
+// 香港"羽化压平"本地高程瓦片目录(main 按 mainFolder 设置;见 ELEVATION 分支注释)
+static std::string gHkDemFolder;
+
 static std::string createCustomPath(int type, const std::string& prefix, int x, int y, int z)
 {
     // 内部瓦片是 TMS（OriginBottomLeft=1，原点左下）。在线服务（ArcGIS / Terrarium）
@@ -225,24 +229,38 @@ static std::string createCustomPath(int type, const std::string& prefix, int x, 
         // 香港城区平原去伪:Terrarium(SRTM 派生)是含楼高的表面模型(DSM),高楼区把楼高掺进
         // 地形(实测尖沙咀瓦片 p90≈37m、最高 78m,真实地面仅 3-8m),再乘 TileElevationScale=2
         // → 亮色底图被绷在 ~80-120m 的假土包上,与实景三维层(真实高度)严重错位、拉扯变形。
-        // 九龙半岛+港岛北岸本就是近乎平原 → 城区 bbox 内 z>=12 直接返回空路径(引擎语义=平坦
-        // 海平面几何),假土包消失;bbox 刻意避开太平山/狮子山/魔鬼山等真山体,山景不受影响。
-        // EARTH_HK_FLATDEM=0 可关闭(恢复原始 DEM 观感,对比用)。
-        if (z >= 12)
+        // 修法:优先使用预生成的"羽化压平"本地瓦片(gen_hk_flat_dem.py 产出,核心区压平到
+        // ≤6m、向外 ~1.2km 平滑过渡到原始高程;z8-15 全层级同一函数处理 → 父子 LOD 与 bbox
+        // 内外邻接由构造保证一致,无落差/漏空壳)。z>15 走下方 z15 祖先分支时同样命中本地
+        // z15 瓦片,烘焙机制不变。EARTH_HK_FLATDEM=0 可关闭(恢复原始 DEM,对比用)。
         {
             static const bool flatHK = []() {
                 const char* e = getenv("EARTH_HK_FLATDEM");
                 return !(e && *e && atoi(e) == 0);
             }();
-            if (flatHK)
+            if (flatHK && !gHkDemFolder.empty())
             {
-                double n = (double)(1 << z);
-                double lonMin = (double)x / n * 360.0 - 180.0;
-                double lonMax = (double)(x + 1) / n * 360.0 - 180.0;
-                double latMax = atan(sinh(osg::PI * (1.0 - 2.0 * (double)yXYZ / n))) * 180.0 / osg::PI;
-                double latMin = atan(sinh(osg::PI * (1.0 - 2.0 * (double)(yXYZ + 1) / n))) * 180.0 / osg::PI;
-                if (lonMax > 114.115 && lonMin < 114.225 && latMax > 22.276 && latMin < 22.335)
-                    return "";
+                int lx = x, lyXYZ = yXYZ, lz = z;
+                if (z > 15)   // 与下方 z>15 祖先规则同款坐标,保证烘焙采样一致
+                {
+                    int dz = z - 15;
+                    lx = x >> dz; lyXYZ = (1 << 15) - 1 - (y >> dz); lz = 15;
+                }
+                if (lz >= 8)
+                {
+                    // 粗判 bbox(含羽化带)再查文件,避免全球瓦片都 stat 一次
+                    double n = (double)(1 << lz);
+                    double lonMin = (double)lx / n * 360.0 - 180.0;
+                    double lonMax = (double)(lx + 1) / n * 360.0 - 180.0;
+                    double latMax = atan(sinh(osg::PI * (1.0 - 2.0 * (double)lyXYZ / n))) * 180.0 / osg::PI;
+                    double latMin = atan(sinh(osg::PI * (1.0 - 2.0 * (double)(lyXYZ + 1) / n))) * 180.0 / osg::PI;
+                    if (lonMax > 114.10 && lonMin < 114.24 && latMax > 22.26 && latMin < 22.35)
+                    {
+                        std::string local = gHkDemFolder + "/" + std::to_string(lz) + "/"
+                                          + std::to_string(lx) + "/" + std::to_string(lyXYZ) + ".png";
+                        if (osgDB::fileExists(local)) return local;
+                    }
+                }
             }
         }
         // AWS Terrarium 高程最高约 z15。深瓦片(z>15)取 z15 **祖先瓦片**,createTile 用 elevScaleBias
@@ -350,6 +368,7 @@ int main(int argc, char** argv)
     osgDB::Registry::instance()->addFileExtensionAlias("tif", "verse_tiff");
 
     std::string mainFolder = BASE_DIR + "/models"; arguments.read("--folder", mainFolder);
+    gHkDemFolder = mainFolder + "/Earth/hk_dem";   // 在建地球/预热之前设好(两者都走 createCustomPath)
     std::string skirtRatio = "0.05"; arguments.read("--skirt", skirtRatio);
     int w = 1920, h = 1080; arguments.read("--resolution", w, h);
     bool cityWaitingTiles = true, manipulatorCanThrow = false;
