@@ -203,10 +203,22 @@ static std::string createCustomPath(int type, const std::string& prefix, int x, 
     int yXYZ = (int)pow(2.0, (double)z) - 1 - y;
     if (type == osgVerse::TileCallback::ORTHOPHOTO)
     {
-        // Google 混合瓦片（lyrs=y：卫星影像 + 道路/地名标注）。URL 含 '='/'&'，
-        // osgDB::Options 解析会把多 '=' 的值截断，所以在这里硬编码而非放进 earthURLs。
-        static const std::string google = "https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}";
-        return osgVerse::TileCallback::createPath(google, x, yXYZ, z);
+        // 卫星底图模板。URL 含 '='/'&',osgDB::Options 解析会把多 '=' 的值截断,
+        // 所以在这里硬编码而非放进 earthURLs。EARTH_BASEMAP 可换源(启动时读一次):
+        //   未设/google → Google lyrs=s(香港等高密度区掺倾斜航拍,楼体在地面影像里是斜的);
+        //   esri        → Esri World Imagery(多数城市更接近真正射,可对比"地面扭曲"观感);
+        //   其它        → 当作自定义模板(需含 {x}/{y}/{z} 占位符)。
+        static const std::string basemap = []() {
+            const char* e = getenv("EARTH_BASEMAP");
+            std::string v = e ? e : "";
+            if (v.empty() || v == "google")
+                return std::string("https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}");
+            if (v == "esri")
+                return std::string("https://server.arcgisonline.com/ArcGIS/rest/services/"
+                                   "World_Imagery/MapServer/tile/{z}/{y}/{x}");
+            return v;
+        }();
+        return osgVerse::TileCallback::createPath(basemap, x, yXYZ, z);
     }
     else if (type == osgVerse::TileCallback::ELEVATION)
     {
@@ -370,7 +382,8 @@ int main(int argc, char** argv)
     FlightLayer* flightLayer = nullptr;
     sceneCamera->addChild(configureFlightLayer(viewer, earthRoot.get(), mainFolder, &flightLayer));
 
-    sceneCamera->addChild(configure3DTilesLayer(viewer, earthRoot.get(), mainFolder));
+    Tiles3DLayer* tiles3dLayer = nullptr;
+    sceneCamera->addChild(configure3DTilesLayer(viewer, earthRoot.get(), mainFolder, &tiles3dLayer));
 
     osg::ref_ptr<PrecipController> precip = configurePrecipLayer(viewer);
 
@@ -495,6 +508,15 @@ int main(int argc, char** argv)
         FlightLayer* fptr = flightLayer;
         flights.apply = [fptr](const OverlayLayer& l) { if (fptr) fptr->setEnabled(l.enabled); };
         layerMgr.add(flights);
+
+        // 香港实景三维(地政总署 3D Visualisation Map,Cesium 3D Tiles 流式)。
+        // 懒加载:首次勾选才联网;官方使用条款要求署名 → subtitle 常显数据来源。
+        OverlayLayer hk3d; hk3d.id = "hk3d"; hk3d.displayName = u8"香港实景三维 (LandsD)";
+        hk3d.group = u8"三维城市 / 3D City"; hk3d.enabled = false; hk3d.hasOpacity = false;
+        hk3d.subtitle = u8"© 香港特区政府地政总署 data.map.gov.hk";
+        Tiles3DLayer* tptr = tiles3dLayer;
+        hk3d.apply = [tptr](const OverlayLayer& l) { if (tptr) tptr->setEnabled(l.enabled); };
+        layerMgr.add(hk3d);
     }
     // 同步初始状态到 uniform（apply 只在交互时触发，这里推一次初值）
     if (OverlayLayer* lbl = layerMgr.find("labels"))
@@ -533,6 +555,14 @@ int main(int argc, char** argv)
         const char* flEnv = getenv("EARTH_FLIGHTS");
         if (flEnv && *flEnv) fl->enabled = (atoi(flEnv) != 0);
         layerMgr.setEnabled("flights", fl->enabled);
+    }
+    if (OverlayLayer* t3 = layerMgr.find("hk3d"))
+    {
+        // EARTH_3DTILES 已设置(=1 默认源 / =<url> 换源,见 tiles3d_data.cpp)→ 随启动开启;
+        // 值为 0 视作显式关闭。未设置 → 默认关,由 UI 勾选触发懒加载。
+        const char* tEnv = getenv("EARTH_3DTILES");
+        if (tEnv && *tEnv) t3->enabled = (std::string(tEnv) != "0");
+        layerMgr.setEnabled("hk3d", t3->enabled);
     }
 
     // ImGui 控制面板 — 挂到最终 HUD 相机（cameras[3]），确保在地球图像之上绘制

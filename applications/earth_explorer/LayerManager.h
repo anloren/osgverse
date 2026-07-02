@@ -10,6 +10,7 @@ struct OverlayLayer
 {
     enum Type { RasterTile, PointFeed, Grid };
     std::string id, displayName, group;
+    std::string subtitle;        // 可选:显示在开关下方的小字(数据来源署名等)
     Type type = RasterTile;
     bool enabled = false;
     bool hasOpacity = false;     // 栅格层有透明度滑块

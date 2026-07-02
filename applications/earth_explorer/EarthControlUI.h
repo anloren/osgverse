@@ -166,6 +166,7 @@ struct EarthControlUI : public osgVerse::ImGuiContentHandler
                     bool en = l.enabled;
                     if (ImGui::Checkbox(l.displayName.c_str(), &en)) _layers->setEnabled(l.id, en);
                     if (l.needsKey) { ImGui::SameLine(); ImGui::TextDisabled(u8"🔑"); }
+                    if (!l.subtitle.empty()) ImGui::TextDisabled("%s", l.subtitle.c_str());
                     if (l.hasOpacity && l.enabled)
                     {
                         float op = l.opacity;

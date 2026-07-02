@@ -4,7 +4,18 @@
 > 用户主语言中文，请用中文回复。macOS / Apple Silicon。
 
 ---
-## ✅ 2026-07-02 会话(续)— f2 决策已定 + 已 push + f2 实测:数据全免 key 直达,但插件缺"外链 tileset 矩阵继承"(最新,先读这个)
+## ✅ 2026-07-02 会话(续2)— f2 正式接入为图层 + EARTH_BASEMAP 底图钩子(最新,先读这个)
+
+用户拍板"都做",已完成并验证。详见 `docs/superpowers/plans/2026-07-02-earth-hk-f2-layer.md`。
+
+- **f2 正式图层**:`tiles3d_data.{h,cpp}` 重构为 `Tiles3DLayer` 控制器(仿 QuakeLayer);默认源=f2(免 key,实测),**懒加载**(勾选才后台线程拉根 tileset → update 回调主线程挂树;NodeMask 开关,关=零流量)。UI 新组「三维城市 / 3D City」+ 署名小字(OverlayLayer 新增通用 subtitle 字段)。`EARTH_3DTILES`:`1`=默认源随启动开 / `<url>`=换源 / `0`=关 / 未设=UI 控制。
+- **EARTH_BASEMAP 钩子**:`google`(默认)/`esri`/自定义模板,createCustomPath ORTHOPHOTO 分支,预热同源。
+- **"地面扭曲"最终定性(修正版,两层)**:主因=**f2 自身粗 LOD 网格**(ContextCapture 粗层融化观感,细化跟上即清晰,渐进流式中间态非 bug);次因=Google/Esri 香港正射掺倾斜航拍(楼烘焙进地面,两家都有)。
+- **验证**:f2 尖沙咀街道级细化 ✓、默认零流量 ✓、全球远景+极点回归 ✓、Esri 切源 ✓。真机交互验证待用户。
+- 未闭环小事项(不阻塞)见 plan 文档:粗 LOD 观感无 SSE 调节钩子、EARTH_TILT 时序、dist 未重打包。
+
+---
+## ✅ 2026-07-02 会话(续)— f2 决策已定 + 已 push + f2 实测:数据全免 key 直达,但插件缺"外链 tileset 矩阵继承"(结论后被修正,见续2)
 
 **用户把 f2 调研与否的决定权交给本会话,已按计划执行完毕**:9 个 commit 已 push `origin/master`(HEAD=`1484f3f7`),f2 实测完成,**结论:接入 f2 不是换个 URL 就行,插件有一个明确的缺口要修**。
 

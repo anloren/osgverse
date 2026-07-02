@@ -8,6 +8,9 @@
 #include <pipeline/Pipeline.h>
 #include <pipeline/Utilities.h>
 #include <iostream>
+#include <atomic>
+#include <mutex>
+#include <thread>
 #include "tiles3d_data.h"
 
 // 3D Tiles(Cesium b3dm/glTF)几何在 sceneCamera(= earthCamera)下渲染。earthCamera 的
@@ -71,45 +74,101 @@ static void applyTilesShader(osg::StateSet* ss)
     ss->getOrCreateUniform("DiffuseMap", osg::Uniform::INT)->set((int)0);  // 材质贴图绑在单元 0
 }
 
+// 默认数据源:香港地政总署「可视化三维地图」(3D Visualisation Map,f2 端点)。
+// Cesium 3D Tiles + WGS84,实景摄影测量网格(KTX2 纹理);实测无 key 亦可访问,
+// 官方要求署名(UI 图层开关下方有署名小字,见 earth_main.cpp 注册处)。
+static const char* kDefaultTilesUrl =
+    "https://data.map.gov.hk/api/3d-data/3dtiles/f2/tileset.json";
+
+// 根 tileset 的同步网络读取(秒级)不能放主线程 → 首次开启时后台线程拉取,
+// 结果经 _pending 槽由本回调(update 阶段,主线程)挂树。挂树后开关只切 NodeMask。
+class Tiles3DLayerImpl : public Tiles3DLayer, public osg::NodeCallback
+{
+public:
+    Tiles3DLayerImpl(osg::Group* group, const std::string& url)
+        : _group(group), _url(url), _enabled(false), _loadStarted(false), _loadDone(false) {}
+
+    virtual void setEnabled(bool on)
+    {
+        _enabled = on;
+        OSG_INFO << "[Tiles3D] setEnabled(" << (on ? 1 : 0) << "), loadStarted=" << _loadStarted << std::endl;
+        // NodeMask=0 时 update/cull 都不遍历 → 关闭即停:不发瓦片请求、不渲染。
+        _group->setNodeMask(on ? ~0u : 0u);
+        if (on && !_loadStarted)
+        {
+            _loadStarted = true;
+            std::string url = _url;
+            osg::ref_ptr<Tiles3DLayerImpl> self(this);   // 保活到线程结束
+            std::thread([self, url]() {
+                OSG_INFO << "[Tiles3D] background load begins: " << url << std::endl;
+                osg::ref_ptr<osg::Node> tiles;
+                bool isHttp = (url.rfind("http://", 0) == 0 || url.rfind("https://", 0) == 0);
+                if (isHttp)
+                {
+                    // 网络 URL:通过 verse_web 读取器获取内容,并以 verse_tiles 解析
+                    // (参见 plugins/osgdb_3dtiles/ReaderWriter3dTiles.cpp 约第 49 行注释)
+                    osg::ref_ptr<osgDB::Options> opt = new osgDB::Options("Extension=verse_tiles");
+                    tiles = osgDB::readNodeFile(url + ".verse_web", opt.get());
+                }
+                else
+                    tiles = osgDB::readNodeFile(url + ".verse_tiles");
+
+                std::lock_guard<std::mutex> guard(self->_mutex);
+                self->_pending = tiles; self->_loadDone = true;
+            }).detach();
+        }
+    }
+    virtual bool isEnabled() const { return _enabled; }
+
+    virtual void operator()(osg::Node* node, osg::NodeVisitor* nv)
+    {
+        if (_loadDone.exchange(false))
+        {
+            osg::ref_ptr<osg::Node> tiles;
+            { std::lock_guard<std::mutex> guard(_mutex); tiles = _pending; _pending = NULL; }
+            if (tiles.valid())
+            {
+                _group->addChild(tiles.get());
+                const osg::BoundingSphere& bs = tiles->getBound();
+                OSG_NOTICE << "[Tiles3D] loaded: " << _url << "  bound center=" << bs.center()
+                           << " radius=" << bs.radius() << std::endl;
+            }
+            else
+                OSG_WARN << "[Tiles3D] FAILED to load: " << _url << std::endl;
+        }
+        traverse(node, nv);
+    }
+
+protected:
+    virtual ~Tiles3DLayerImpl() {}
+    osg::observer_ptr<osg::Group> _group;   // group 持有本回调,防环引用
+    std::string _url;
+    std::mutex _mutex;
+    osg::ref_ptr<osg::Node> _pending;
+    bool _enabled, _loadStarted;
+    std::atomic<bool> _loadDone;
+};
+
 osg::Node* configure3DTilesLayer(osgViewer::View& /*viewer*/,
                                  osg::Node* /*earthRoot*/,
-                                 const std::string& /*mainFolder*/)
+                                 const std::string& /*mainFolder*/,
+                                 Tiles3DLayer** outLayer)
 {
     osg::ref_ptr<osg::Group> group = new osg::Group;
     group->setName("Tiles3DLayer");
+    group->setNodeMask(0);   // 默认关(懒加载,不联网)
 
+    // EARTH_3DTILES=<url> 换数据源;=1 用默认源(香港 f2)。是否随启动开启由
+    // earth_main 的图层注册处统一决定(与 EARTH_QUAKES/EARTH_FLIGHTS 同模式)。
+    std::string url = kDefaultTilesUrl;
     const char* env = getenv("EARTH_3DTILES");
-    if (!env || !env[0]) return group.release();   // 未设置 → 零影响
+    if (env && env[0] && std::string(env) != "1") url = env;
 
-    std::string url(env);
-    osg::ref_ptr<osg::Node> tiles;
+    // 给整层挂自带的网格着色器,覆盖从 earthCamera 继承来的 globe 程序。
+    applyTilesShader(group->getOrCreateStateSet());
 
-    bool isHttp = (url.rfind("http://", 0) == 0 || url.rfind("https://", 0) == 0);
-    if (isHttp)
-    {
-        // 网络 URL:通过 verse_web 读取器获取内容,并以 verse_tiles 解析
-        // (参见 plugins/osgdb_3dtiles/ReaderWriter3dTiles.cpp 约第 49 行注释)
-        osg::ref_ptr<osgDB::Options> opt = new osgDB::Options("Extension=verse_tiles");
-        tiles = osgDB::readNodeFile(url + ".verse_web", opt.get());
-    }
-    else
-    {
-        tiles = osgDB::readNodeFile(url + ".verse_tiles");
-    }
-
-    if (tiles.valid())
-    {
-        group->addChild(tiles.get());
-        // 给整层挂自带的网格着色器,覆盖从 earthCamera 继承来的 globe 程序。
-        applyTilesShader(group->getOrCreateStateSet());
-        const osg::BoundingSphere& bs = tiles->getBound();
-        OSG_NOTICE << "[Tiles3D] loaded: " << url << "  bound center=" << bs.center()
-                   << " radius=" << bs.radius() << std::endl;
-    }
-    else
-    {
-        OSG_WARN << "[Tiles3D] FAILED to load: " << url << std::endl;
-    }
-
+    Tiles3DLayerImpl* impl = new Tiles3DLayerImpl(group.get(), url);
+    group->setUpdateCallback(impl);
+    if (outLayer) *outLayer = impl;
     return group.release();
 }
