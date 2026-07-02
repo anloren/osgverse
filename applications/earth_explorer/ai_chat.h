@@ -56,6 +56,9 @@ namespace earthai
         // 主线程每帧调:执行排队的工具调用(工具必须主线程),推进代理循环
         void drainMainThread();
         std::vector<ChatEntry> transcript() const;       // UI 读(加锁快照)
+        // 仅测试用:导出当前 _history 序列化后的 Gemini contents JSON,
+        // 供单测校验 functionCall/functionResponse 严格配对;业务代码不要调用
+        std::string historyContentsForTest() const;
         std::string systemPrompt;                        // 中文系统提示词,earth_main 里设置
 
     private:

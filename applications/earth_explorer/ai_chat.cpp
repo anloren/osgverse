@@ -150,11 +150,17 @@ namespace earthai
             HistoryItem hi; hi.role = HistoryItem::USER_TEXT; hi.text = userText;
             _history.push_back(hi);
 
-            // 只保留最近 10 轮 user+assistant 交换(粗略按条目数裁剪,保留 functionCall/Response 配对的完整性由
-            // 调用方 submit 时机保证——裁剪只在新一轮 submit 开始时做,不会切断进行中的一轮)
-            const size_t kMaxHistoryItems = 40; // 10 轮 user+assistant 粗略上限(含工具调用/结果条目)
+            // 历史裁剪:按条目数粗略限长(约 10 轮 user+assistant 交换,含工具调用/结果条目)。
+            // 切点必须落在用户文本边界:硬切可能停在 MODEL_CALL 与 TOOL_RESPONSE 之间,
+            // 或让历史以非 user 角色开头——两种情况真实 Gemini API 都会 400。
+            // 因此算出目标切点后向后推进到下一个 USER_TEXT 才 erase。
+            const size_t kMaxHistoryItems = 40;
             if (_history.size() > kMaxHistoryItems)
-                _history.erase(_history.begin(), _history.begin() + (_history.size() - kMaxHistoryItems));
+            {
+                size_t cut = _history.size() - kMaxHistoryItems;
+                while (cut < _history.size() && _history[cut].role != HistoryItem::USER_TEXT) ++cut;
+                _history.erase(_history.begin(), _history.begin() + cut);
+            }
 
             _busy = true;
             _round = 0;
@@ -180,27 +186,30 @@ namespace earthai
         {
             // worker 线程:只调用 provider->chat,绝不碰 registry/transcript/_history 之外的东西,
             // 结果一律通过加锁的 _pending* 交回主线程处理。
-            LLMTurn turn = provider->chat(contentsJson, declsJson);
+            // 注意:_busy 一律由主线程的 drainMainThread 清除(消费完 pending 之后),
+            // worker 不清 busy——否则"busy 已清但回复还没上屏"的窗口里 submit 会插队打乱会话。
+            LLMTurn turn;
+            try { turn = provider->chat(contentsJson, declsJson); }
+            catch (const std::exception& e)
+            {
+                // Provider 内部异常(如 picojson::get 类型不符)转成错误结果,避免异常逃逸 std::terminate
+                turn = LLMTurn(); turn.error = std::string("provider exception: ") + e.what();
+            }
 
             std::lock_guard<std::mutex> g(_mutex);
-            _pendingEntries.clear();
-            _pendingCalls.clear();
-
             if (!turn.error.empty())
             {
                 ChatEntry e; e.kind = ChatEntry::ERR; e.text = turn.error;
                 _pendingEntries.push_back(e);
-                _busy = false; // 出错直接结束这一轮代理循环
             }
             else if (!turn.calls.empty())
             {
-                _pendingCalls = turn.calls; // busy 保持 true,等 drainMainThread 执行工具
+                _pendingCalls = turn.calls; // 等 drainMainThread 在主线程执行工具
             }
             else
             {
                 ChatEntry e; e.kind = ChatEntry::ASSISTANT; e.text = turn.text;
                 _pendingEntries.push_back(e);
-                _busy = false;
                 _pendingAssistantText = turn.text;
                 _hasPendingAssistantText = true;
             }
@@ -252,9 +261,13 @@ namespace earthai
                 _pendingCalls.clear();
                 haveCalls = true;
             }
+
+            // busy 只在这里(主线程、pending 已消费、回复已上屏)清除,
+            // 关闭"worker 清 busy 但 drain 还没搬运回复"期间 submit 插队的窗口
+            if (!haveCalls) _busy = false;
         }
 
-        if (!haveCalls) return; // 纯文本或错误结果,这一轮代理循环已在 worker 里结束(busy 已清)
+        if (!haveCalls) return; // 纯文本或错误结果,这一轮代理循环到此结束
 
         // 代理循环轮次上限检查(在主线程执行工具前检查,避免无限循环)
         {
@@ -262,6 +275,17 @@ namespace earthai
             ++_round;
             if (_round > kMaxRounds)
             {
+                // 上面已把这批 functionCall 记入 _history,若就此返回会留下"裸 functionCall",
+                // 真实 Gemini API 要求 call/response 严格配对,不配对会让之后每次请求都 400。
+                // 因此给每个未执行的调用补一条合成 functionResponse,保持历史合法。
+                for (size_t i = 0; i < callsToRun.size(); ++i)
+                {
+                    picojson::object errObj;
+                    errObj["error"] = picojson::value("tool loop limit reached");
+                    HistoryItem hi; hi.role = HistoryItem::TOOL_RESPONSE;
+                    hi.callName = callsToRun[i].name; hi.toolResponse = picojson::value(errObj);
+                    _history.push_back(hi);
+                }
                 ChatEntry e; e.kind = ChatEntry::ERR; e.text = u8"工具循环超限";
                 _transcript.push_back(e);
                 _busy = false;
@@ -294,5 +318,12 @@ namespace earthai
     {
         std::lock_guard<std::mutex> g(_mutex);
         return _transcript;
+    }
+
+    std::string AIChatCore::historyContentsForTest() const
+    {
+        // 仅测试用:加锁快照 _history 并序列化,用于校验 call/response 配对
+        std::lock_guard<std::mutex> g(_mutex);
+        return buildContentsJson(_history);
     }
 }

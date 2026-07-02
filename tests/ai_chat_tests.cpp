@@ -1,6 +1,7 @@
 // tests/ai_chat_tests.cpp
 #include <iostream>
 #include <cstdlib>
+#include <condition_variable>
 #include "../applications/earth_explorer/ai_tools.h"
 #include <picojson.h>
 
@@ -112,22 +113,30 @@ int main(int, char**)
 
     // ---- submit while busy 被礼貌忽略 ----
     {
-        // 脚本只有一项,且刻意让 chat() 在被调用前有机会观察到 busy=true:
-        // 用一个会阻塞的 provider 包装,确保第一轮 worker 还没跑完时发起第二次 submit。
-        struct SlowProvider : public LLMProvider
+        // 用条件变量门控的 provider:chat() 阻塞到测试显式放行,
+        // 保证第二次 submit 一定发生在第一轮 worker 完成之前(无任何时间假设)。
+        struct GatedProvider : public LLMProvider
         {
+            std::mutex m; std::condition_variable cv; bool released = false;
             virtual LLMTurn chat(const std::string&, const std::string&)
             {
-                usleep(200000); // 200ms,足够主线程在此期间调用第二次 submit
+                std::unique_lock<std::mutex> lk(m);
+                cv.wait(lk, [this]() { return released; });
                 LLMTurn t; t.text = u8"完成"; return t;
             }
-        } slow;
+            void release()
+            {
+                { std::lock_guard<std::mutex> g(m); released = true; }
+                cv.notify_all();
+            }
+        } gated;
 
         ToolRegistry reg3;
-        AIChatCore core(&slow, &reg3);
+        AIChatCore core(&gated, &reg3);
         core.submit(u8"第一条");
-        CHECK(core.busy()); // 刚提交,worker 还在跑(至少 200ms)
+        CHECK(core.busy()); // worker 被门控阻塞,busy 必然还在
         core.submit(u8"第二条(应被忽略)");
+        gated.release(); // 放行第一轮 worker
 
         for (int i = 0; i < 500 && core.busy(); ++i)
         { core.drainMainThread(); usleep(10000); }
@@ -195,6 +204,62 @@ int main(int, char**)
         CHECK(ts.back().kind == ChatEntry::ERR);
         CHECK(ts.back().text == "boom");
         std::cout << "AIChatCore error surfaces as ERR entry OK\n";
+    }
+
+    // ---- 6 轮上限:超限后历史仍保持 functionCall/functionResponse 严格配对 ----
+    {
+        // 7 个 calls 条目:第 1~6 轮正常执行工具,第 7 轮触发"工具循环超限";
+        // 最后再补一个 text 条目,供超限后的下一次 submit 正常收尾。
+        std::string script = "[";
+        for (int i = 0; i < 7; ++i)
+            script += "{\"calls\":[{\"name\":\"spin\",\"args\":{\"i\":" + std::to_string(i) + "}}]},";
+        script += "{\"text\":\"好的\"}]";
+        FakeProvider fp; CHECK(fp.loadFromString(script));
+
+        ToolRegistry reg6; int spinCount = 0;
+        Tool spin; spin.name = "spin"; spin.description = "";
+        spin.parametersJson = "{\"type\":\"object\",\"properties\":{}}";
+        spin.execute = [&](const picojson::value&) { ++spinCount; return parse("{\"ok\":true}"); };
+        reg6.add(spin);
+
+        AIChatCore core(&fp, &reg6);
+        core.submit(u8"死循环");
+        for (int i = 0; i < 500 && core.busy(); ++i)
+        { core.drainMainThread(); usleep(10000); }
+        core.drainMainThread();
+
+        CHECK(!core.busy());
+        CHECK(spinCount == 6); // 只执行了 6 轮,第 7 轮被上限拦下
+        std::vector<ChatEntry> ts = core.transcript();
+        bool sawLimitErr = false;
+        for (size_t i = 0; i < ts.size(); ++i)
+            if (ts[i].kind == ChatEntry::ERR && ts[i].text == u8"工具循环超限") sawLimitErr = true;
+        CHECK(sawLimitErr);
+
+        // 超限后再 submit 一次正常脚本,确认会话可继续
+        core.submit(u8"继续");
+        for (int i = 0; i < 500 && core.busy(); ++i)
+        { core.drainMainThread(); usleep(10000); }
+        core.drainMainThread();
+        CHECK(core.transcript().back().text == u8"好的");
+
+        // 校验历史:functionCall 与 functionResponse 数量必须相等(不配对会让真实 Gemini API 400)
+        picojson::value hv; std::string herr = picojson::parse(hv, core.historyContentsForTest());
+        CHECK(herr.empty());
+        const picojson::array& contents = hv.get<picojson::array>();
+        size_t nCalls = 0, nResponses = 0;
+        for (size_t i = 0; i < contents.size(); ++i)
+        {
+            const picojson::array& parts = contents[i].get("parts").get<picojson::array>();
+            for (size_t j = 0; j < parts.size(); ++j)
+            {
+                if (parts[j].contains("functionCall")) ++nCalls;
+                if (parts[j].contains("functionResponse")) ++nResponses;
+            }
+        }
+        CHECK(nCalls == 7); // 6 轮执行 + 1 轮被拦(仍记入历史)
+        CHECK(nCalls == nResponses); // 被拦的那轮由合成 functionResponse 补齐配对
+        std::cout << "AIChatCore loop-limit keeps call/response paired OK\n";
     }
 
     std::cout << "ai_chat tests OK\n";
