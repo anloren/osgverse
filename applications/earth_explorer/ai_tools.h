@@ -76,6 +76,8 @@ namespace earthai
             std::lock_guard<std::mutex> g(_mutex);
             std::map<int, AIJob>::iterator it = _jobs.find(id); if (it == _jobs.end()) return;
             it->second.status = st; it->second.progress = progress;
+            // 哨兵语义:空字符串代表"本次调用不更新该字段",保留旧值;
+            // 因此调用方若想真正清空 resultPath/error,不能传空串(当前接口不支持,按需再加显式清空方法)
             if (!resultPath.empty()) it->second.resultPath = resultPath;
             if (!error.empty()) it->second.error = error;
         }
