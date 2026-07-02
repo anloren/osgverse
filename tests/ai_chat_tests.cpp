@@ -262,6 +262,60 @@ int main(int, char**)
         std::cout << "AIChatCore loop-limit keeps call/response paired OK\n";
     }
 
+    // ---- 工具执行抛异常:drainMainThread 兜底为 error functionResponse,不崩、busy 清零 ----
+    {
+        // 第 1 轮调会抛异常的工具(模拟真 Gemini 发错参数类型/漏必填 → picojson get() 抛
+        // std::runtime_error),第 2 轮模型收到 error 响应后给最终文本正常收尾。
+        const char* script =
+            "[{\"calls\":[{\"name\":\"boomer\",\"args\":{\"x\":1}}]},"
+            " {\"text\":\"工具出错但我还活着\"}]";
+        FakeProvider fp; CHECK(fp.loadFromString(script));
+
+        ToolRegistry reg7;
+        Tool boomer; boomer.name = "boomer"; boomer.description = "";
+        boomer.parametersJson = "{\"type\":\"object\",\"properties\":{}}";
+        boomer.execute = [](const picojson::value&) -> picojson::value
+        { throw std::runtime_error("boom"); };
+        reg7.add(boomer);
+
+        AIChatCore core(&fp, &reg7);
+        core.submit(u8"炸一下");
+        for (int i = 0; i < 500 && core.busy(); ++i)
+        { core.drainMainThread(); usleep(10000); }
+        core.drainMainThread();
+
+        // 1) 不崩 + busy 清零(异常若穿出 drainMainThread,进程早已 terminate 到不了这里)
+        CHECK(!core.busy());
+        // 2) 后续轮次正常收尾:模型收到 error 响应后给出的文本上屏
+        std::vector<ChatEntry> ts = core.transcript();
+        CHECK(ts.back().text == u8"工具出错但我还活着");
+        // 3) 历史 functionCall/functionResponse 严格配对,且 response 含 error("tool threw: boom")
+        picojson::value hv; std::string herr = picojson::parse(hv, core.historyContentsForTest());
+        CHECK(herr.empty());
+        const picojson::array& contents = hv.get<picojson::array>();
+        size_t nCalls = 0, nResponses = 0; bool sawToolThrew = false;
+        for (size_t i = 0; i < contents.size(); ++i)
+        {
+            const picojson::array& parts = contents[i].get("parts").get<picojson::array>();
+            for (size_t j = 0; j < parts.size(); ++j)
+            {
+                if (parts[j].contains("functionCall")) ++nCalls;
+                if (parts[j].contains("functionResponse"))
+                {
+                    ++nResponses;
+                    const picojson::value& resp = parts[j].get("functionResponse").get("response");
+                    if (resp.contains("error") &&
+                        resp.get("error").to_str().find("tool threw: boom") != std::string::npos)
+                        sawToolThrew = true;
+                }
+            }
+        }
+        CHECK(nCalls == 1);
+        CHECK(nCalls == nResponses);
+        CHECK(sawToolThrew);
+        std::cout << "AIChatCore tool exception contained OK\n";
+    }
+
     // ---- parseGeminiResponse:纯解析,不碰网络(Task 3)----
     {
         // a) 纯文本响应

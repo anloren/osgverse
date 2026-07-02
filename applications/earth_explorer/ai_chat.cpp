@@ -10,6 +10,19 @@
 
 namespace earthai
 {
+    // 错误摘要截断:截到 200 字符——原文可能很长(base64/大段文本),错误提示没必要塞爆日志/UI。
+    // drainMainThread(工具异常兜底)与 GeminiProvider(响应错误摘要)共用。
+    static std::string truncate200(const std::string& s)
+    {
+        if (s.size() <= 200) return s;
+        std::string r = s.substr(0, 200);
+        // UTF-8 修补:硬切可能切在多字节字符中间,先去掉残缺的续字节(10xxxxxx),
+        // 再去掉一个孤立的多字节首字节(11xxxxxx),避免输出乱码尾巴。
+        while (!r.empty() && ((unsigned char)r.back() & 0xC0) == 0x80) r.pop_back();
+        if (!r.empty() && (unsigned char)r.back() >= 0xC0) r.pop_back();
+        return r;
+    }
+
     // ---------------- FakeProvider ----------------
 
     static LLMTurn parseScriptItem(const picojson::value& item)
@@ -299,7 +312,17 @@ namespace earthai
         {
             const FunctionCall& fc = callsToRun[i];
             picojson::value result;
-            _registry->dispatch(fc.name, fc.args, result);
+            // 工具异常兜底(集中一处,工具本身不必各自 try/catch):模型可能把参数发错类型/
+            // 漏发必填参数,picojson 的 get() 会抛 std::runtime_error;若不捕获,异常会穿出
+            // FRAME handler 直接 terminate 进程且 _busy 卡死。这里把任何异常转成 error
+            // functionResponse 回传模型(历史配对不破坏,busy 流转不变),让模型自行纠错。
+            try { _registry->dispatch(fc.name, fc.args, result); }
+            catch (const std::exception& ex)
+            {
+                picojson::object errObj;
+                errObj["error"] = picojson::value("tool threw: " + truncate200(ex.what()));
+                result = picojson::value(errObj);
+            }
 
             std::string note = u8"⚙ " + fc.name + "(" + fc.args.serialize() + ")";
             std::lock_guard<std::mutex> g(_mutex);
@@ -329,19 +352,6 @@ namespace earthai
     }
 
     // ---------------- GeminiProvider ----------------
-
-    // 从响应体里尽量挖出人类可读的错误摘要(promptFeedback.blockReason 或顶层 error.message),
-    // 截到 200 字符——body 本身可能很长(base64/大段文本),错误提示没必要塞爆日志/UI。
-    static std::string truncate200(const std::string& s)
-    {
-        if (s.size() <= 200) return s;
-        std::string r = s.substr(0, 200);
-        // UTF-8 修补:硬切可能切在多字节字符中间,先去掉残缺的续字节(10xxxxxx),
-        // 再去掉一个孤立的多字节首字节(11xxxxxx),避免输出乱码尾巴。
-        while (!r.empty() && ((unsigned char)r.back() & 0xC0) == 0x80) r.pop_back();
-        if (!r.empty() && (unsigned char)r.back() >= 0xC0) r.pop_back();
-        return r;
-    }
 
     LLMTurn parseGeminiResponse(const std::string& body)
     {
