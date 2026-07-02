@@ -15,6 +15,7 @@
 #include "LayerManager.h"
 #include "quake_data.h"
 #include "flight_data.h"
+#include "ai_ui.h"
 
 // EarthExplorer 的 ImGui 控制面板。直接驱动 EarthManipulator 与 EarthAtmosphereOcean，
 // 不经 USER 事件中转。
@@ -26,6 +27,8 @@ struct EarthControlUI : public osgVerse::ImGuiContentHandler
     LayerManager* _layers = nullptr;   // 由 main 注入
     QuakeLayer* _quake = nullptr;      // 由 main 注入
     FlightLayer* _flight = nullptr;    // 由 main 注入
+    AIChatUI* _aiUI = nullptr;         // 由 main 注入；为空则不画底部聊天条
+    earthai::AIChatCore* _aiCore = nullptr;   // 由 main 注入；draw() 内部对空指针安全
     float _sunAz, _sunEl;     // 太阳方位角/高度角（度）
     float _exposure;          // HDR 曝光
     bool  _exposureAuto;      // 自适应曝光(随高度):低空高曝光、高空低曝光
@@ -273,6 +276,10 @@ struct EarthControlUI : public osgVerse::ImGuiContentHandler
                 if (!open) _flight->clearSelected();  // 点标题栏 [x] 关闭 → 清除选中
             }
         }
+
+        // ===== 底部 AI 对话条:独立浮窗,底部居中锚定,不与左上角/右上角面板重叠 =====
+        if (_aiUI) _aiUI->draw(_aiCore);
+
         if (font) ImGui::PopFont();
     }
 };

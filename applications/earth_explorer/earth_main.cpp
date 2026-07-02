@@ -639,6 +639,8 @@ int main(int argc, char** argv)
     ctrlUI->_layers = &layerMgr;
     ctrlUI->_quake = quakeLayer;
     ctrlUI->_flight = flightLayer;
+    ctrlUI->_aiUI = new AIChatUI;
+    ctrlUI->_aiCore = aiCore;
     imgui->initialize(ctrlUI, false);
     imgui->addToView(&viewer, cameras[3]);  // cameras[3] = finalCamera (HUD, renders to screen)
 
