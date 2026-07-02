@@ -13,9 +13,10 @@
 - **完全不需要 key(实测)**:`https://data.map.gov.hk/api/3d-data/3dtiles/f2/tileset.json` 及其下所有子 tileset/b3dm,**不带 key 全部 HTTP 200 直接下载**。官方文档说的 key(同一邮箱 `3dmap@landsd.gov.hk` 免费申请)当前未强制。署名要求与 3dsd 相同。
 - **纹理是真 photorealistic**:抽查叶子 b3dm,嵌入 **KTX2**(Basis)压缩纹理,单瓦片 74KB 真实航拍纹理。**引擎的 KTX2 转码链路实测工作正常**(`LoaderGLTF`→`loadKtx2`→`[LoaderKTX] Transcoded format ... 83f0`=DXT1,一次 headless 跑出数千次成功转码)。
 - **结构(ContextCapture 风味,与 3dsd 不同)**:root tileset(asset 1.1,refine=ADD,box 为绝对 ECEF)→ 17 个外链子 tileset(如 `1/tileset.json`,**root.transform=纯 ECEF 平移**,box 为局部坐标)→ 再外链叶子 tileset(如 `1/Data/temp0/Tile_5_15_L4.json`,**自己没有 transform**,坐标沿用父级局部系)→ b3dm(gltfUpAxis=Y)。
-- **渲染缺口(决定性 A/B 证据)**:headless 指向 f2,同视角(尖沙咀/半山 2km)开/关 `EARTH_3DTILES` 截图逐像素 diff **只差 0.02%**(UI 数字抖动)——**瓦片在流式加载、KTX2 在转码,但网格没画出来**。根因:叶子 tileset 无自身 transform,按 3D Tiles 规范外链 tileset 的 root 要**继承引用方累积的 transform**;`plugins/osgdb_3dtiles` 只应用"本文件 root 自己的 transform",不跨文件传播 → 叶子几何落在局部坐标(离地心 ~40km 的地球内部),永不可见。3dsd/旧 fixture 不受影响是因为它们矩阵都写在各自文件根部。
-- **诊断复现**:`EARTH_3DTILES="https://data.map.gov.hk/api/3d-data/3dtiles/f2/tileset.json"` + headless 配方(见 2026-07-01 plan),日志有 `[Tiles3D] loaded ... radius=42114`(root 包围球正确,因为 root box 是绝对 ECEF)+ 大量 KTX 转码,但画面无建筑。注意 headless 截图需 `dangerouslyDisableSandbox`(沙箱拦应用写 /tmp)。
-- **下一步(待用户点头)**:修 `ReaderWriter3dTiles.cpp` 的 transform 继承(把父级累积矩阵传入外链 tileset 的加载),预计中等工作量;修好后 f2 直接可用,普通楼也有真实纹理,解决 3dsd"大片灰模"的观感问题。3dsd 路线继续可用,不冲突。
+- **f2 网格实际能渲染(用户亲眼确认)**:我一度根据"叶子 tileset 无自身 transform + headless A/B diff 0.02%"判断插件缺外链矩阵继承 → **这个结论是错的,已撤回**。真相:`ReaderWriter3dTiles.cpp::createTile` 先构建 content/children 子树、**最后**才用本文件 root 的 transform 包 `MatrixTransform`(约 L281-293),外链 tileset 作为子节点天然嵌套在引用方的矩阵之下,场景图自动完成累积——矩阵链路是通的。用户在测试窗口交互拖动时**亲眼看到 f2 带真实纹理的建筑**。
+- **仍未解释的小谜(下轮如果正式接入 f2 时再查)**:headless `--goto 22.296 114.156 2.0` 俯视、开/关 f2 的截图逐像素 diff 只有 0.02%,但同次运行有 1413 次 KTX 成功转码——"瓦片已加载已挂树"与"该视角截图无差异"的矛盾没有闭环(怀疑与 LOD 挂接时机/相机视角有关,交互拖动时确认可见)。诊断时注意:headless 截图需 `dangerouslyDisableSandbox`(沙箱拦应用写 /tmp);`EARTH_TILT` 与 goto 动画时序冲突,低空斜视角构图 headless 复现不出来,别再浪费时间,直接真机交互看。
+- **"地面地图扭曲"已定性 = Google 源影像自带(非 bug)**:直接 curl 原始瓦片(`mt1.google.com/vt/lyrs=s` 半山 z17)可见楼体大面积倾斜——香港高密度区 Google 正射拼接掺了倾斜航拍,楼的侧立面被烘焙进地面影像。与昆明瓦片错位是两回事,改渲染代码修不了。开 3D 建筑层后视觉冲突更明显(立体楼直立 vs 地面"画着"倒伏楼)。缓解方向:换更接近真正射的底图(如 Esri World Imagery,可做 EARTH_BASEMAP 钩子对比)或接受现状(f2 网格自带真实地面纹理,近距离会盖住底图)。
+- **下一步(待用户点头)**:正式接入 f2 为可开关图层(URL 默认值/UI 开关/数据来源署名),顺带查上面那个 headless 可见性小谜;3dsd 路线继续可用,不冲突。
 
 ---
 ## ✅ 2026-07-02 会话 — 香港真实 3D Tiles：破碎 bug 已修复 + 纹理"问题"查明是官方预期行为
