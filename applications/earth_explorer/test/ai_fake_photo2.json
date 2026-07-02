@@ -1,0 +1,4 @@
+[{"calls":[{"name":"generate_photo","args":{}}]},
+ {"text":"第一张生成中"},
+ {"calls":[{"name":"generate_photo","args":{}}]},
+ {"text":"第二张生成中"}]

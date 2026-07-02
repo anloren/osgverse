@@ -46,9 +46,23 @@ namespace earthai
 
     SnapshotGrabber::SnapshotGrabber(osgViewer::Viewer* viewer) : _viewer(viewer)
     {
+        // 唯一一个 ScreenCaptureHandler,构造时创建并 addEventHandler 一次;grab() 只更新
+        // 它内部 WriteToFile 的捕获目标(setCaptureOperation),不再重复 addEventHandler ——
+        // 修复此前"每次 grab() 都 new 一个 handler 且从不摘除"导致 viewer 上 handler 无限
+        // 累积的问题(N 次 grab 后 viewer 挂了 N 个 handler)。
         // WriteToFile 的 filename 是"不含扩展名的前缀",实际路径由 EARTH_AUTOCAP 同款规则
         // 拼成 "<prefix>_0.<ext>"(单 context、OVERWRITE 策略下固定后缀 "_0")。
-        // grab() 每次重建 WriteToFile(不同前缀),避免多次调用互相覆盖对方的目标文件。
+        osg::ref_ptr<osgViewer::ScreenCaptureHandler::WriteToFile> writer =
+            new osgViewer::ScreenCaptureHandler::WriteToFile(
+                "", "png", osgViewer::ScreenCaptureHandler::WriteToFile::OVERWRITE);
+        _capturer = new osgViewer::ScreenCaptureHandler(writer.get(), 1);
+        // ScreenCaptureHandler 默认响应键盘 'c' 触发截屏(见 handle() 里 _keyEventTakeScreenShot);
+        // 这会导致用户在 AI 拍照流程之外按一次 'c' 就写出一份意料之外的文件(用当前 WriteToFile
+        // 前缀,即最近一次 grab() 的目标)。setKeyEventTakeScreenShot(0) 存在于此版本 OSG
+        // (build/sdk_core/include/osgViewer/ViewerEventHandlers 已确认),0 不是合法 GUIEventAdapter
+        // 键值,等效关闭该热键。
+        _capturer->setKeyEventTakeScreenShot(0);
+        _viewer->addEventHandler(_capturer.get());
     }
 
     void SnapshotGrabber::grab(const std::string& pngPath)
@@ -59,11 +73,12 @@ namespace earthai
         if (prefix.size() >= ext.size() && prefix.compare(prefix.size() - ext.size(), ext.size(), ext) == 0)
             prefix.resize(prefix.size() - ext.size());
 
+        // 只重设捕获目标(新 WriteToFile 覆盖旧的 CaptureOperation),复用同一个已挂载的
+        // handler,不再 addEventHandler。
         osg::ref_ptr<osgViewer::ScreenCaptureHandler::WriteToFile> writer =
             new osgViewer::ScreenCaptureHandler::WriteToFile(
                 prefix, "png", osgViewer::ScreenCaptureHandler::WriteToFile::OVERWRITE);
-        _capturer = new osgViewer::ScreenCaptureHandler(writer.get(), 1);
-        _viewer->addEventHandler(_capturer.get());
+        _capturer->setCaptureOperation(writer.get());
         _capturer->setFramesToCapture(1);
         _capturer->captureNextFrame(*_viewer);
         OSG_NOTICE << "[AIChat] snapshot grab -> " << pngPath << std::endl;
@@ -242,9 +257,15 @@ namespace earthai
         return has;
     }
 
+    // WAITING_SNAPSHOT 状态下 update() 的超时阈值(见类头注释与 update() 里的判定)。
+    // 600 次≈600 帧,正常帧率下几秒钟就该等到快照文件;真出现"文件永不出现"的极端情况
+    // (例如磁盘写失败但没报错、或 CaptureOperation 目标被意外替换),超过这个次数就判超时,
+    // 避免 job 永远卡在 WAITING_SNAPSHOT、后续所有 generate_photo 都被"already running"拒绝。
+    static const int kWaitSnapshotTimeoutTicks = 600;
+
     MediaManager::MediaManager(osgViewer::Viewer* viewer, AICardPanel* cards, const std::string& apiKeyOrEmpty)
         : _viewer(viewer), _cards(cards), _apiKey(apiKeyOrEmpty), _grabber(viewer),
-          _state(IDLE), _jobId(0), _workerJoinable(false)
+          _state(IDLE), _jobId(0), _workerJoinable(false), _waitSnapshotTicks(0)
     {}
 
     MediaManager::~MediaManager()
@@ -301,6 +322,7 @@ namespace earthai
         if (_cards) _cards->pushJob(&_jobs, _jobId, u8"生成实景照片");
         _grabber.grab(_snapPath);
         _state = WAITING_SNAPSHOT;
+        _waitSnapshotTicks = 0;  // 重新计数,供 update() 判断等待超时
 
         OSG_NOTICE << "[AIChat] generate_photo job=" << _jobId << " snap=" << _snapPath << std::endl;
 
@@ -314,7 +336,20 @@ namespace earthai
     {
         if (_state == WAITING_SNAPSHOT)
         {
-            if (!_grabber.ready(_snapPath)) return;
+            if (!_grabber.ready(_snapPath))
+            {
+                // 快照文件迟迟不出现(例如捕获回调没被触发/磁盘异常):计数超阈值就判超时,
+                // 收尾 job 为 FAILED 并把状态机拉回 IDLE,避免永久卡住导致后续 generate_photo
+                // 全部被 startPhotoJob 的 "photo job already running" 拒绝。
+                if (++_waitSnapshotTicks > kWaitSnapshotTimeoutTicks)
+                {
+                    _jobs.update(_jobId, AIJob::FAILED, 1.0f, "", "snapshot timeout");
+                    if (_cards) _cards->removeJob(_jobId);
+                    OSG_WARN << "[AIChat] photo job timeout waiting snapshot" << std::endl;
+                    _state = IDLE;
+                }
+                return;
+            }
 
             std::string snapBytes;
             // 实际磁盘文件名带 "_0" 后缀(见 SnapshotGrabber::ready 注释)。

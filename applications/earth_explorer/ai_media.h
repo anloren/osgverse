@@ -17,6 +17,8 @@ namespace earthai
     // 抓当前帧到 PNG 文件。基于 osgViewer::ScreenCaptureHandler(EARTH_AUTOCAP 同款),
     // 挂到 viewer 上按需触发单帧捕获;写盘由捕获回调在渲染后完成(异步:调用 grab() 之后
     // 要过几帧文件才会出现,ready() 供轮询)。
+    // handler 只在构造时创建并 addEventHandler 一次,grab() 复用同一个 handler(只换写盘目标),
+    // 避免每次 grab() 都新增一个 handler 导致 viewer 上 handler 无限累积(见 .cpp 注释)。
     class SnapshotGrabber
     {
     public:
@@ -26,7 +28,7 @@ namespace earthai
 
     private:
         osgViewer::Viewer* _viewer;
-        osg::ref_ptr<osgViewer::ScreenCaptureHandler> _capturer;
+        osg::ref_ptr<osgViewer::ScreenCaptureHandler> _capturer;  // 唯一实例,构造时创建并挂一次
     };
 
     // Gemini 图像生成 Provider:输入渲染帧 PNG 字节 + 提示词,同步阻塞调用(供 worker 线程用)。
@@ -78,6 +80,7 @@ namespace earthai
         std::string _snapPath, _genPath, _prompt;
         std::thread _worker;
         bool _workerJoinable;
+        int _waitSnapshotTicks;  // 进入 WAITING_SNAPSHOT 后累计的 update() 调用次数,超阈值判超时
 
         void joinWorkerIfAny();
     };
