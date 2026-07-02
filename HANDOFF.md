@@ -4,7 +4,81 @@
 > 用户主语言中文，请用中文回复。macOS / Apple Silicon。
 
 ---
-## ✅ 2026-07-02 会话(续2)— f2 正式接入为图层 + EARTH_BASEMAP 底图钩子(最新,先读这个)
+## ✅ 2026-07-02 会话(续)— AI Chat 已全量落地(最新,先读这个)
+
+自然语言驱动 EarthExplorer 的 AI 对话功能(Gemini)已完整实现、10 个任务全部完成,详见 `docs/superpowers/plans/2026-07-02-earth-ai-chat.md`(全部勾选 + 末尾"执行记录"章节)与 `docs/superpowers/specs/2026-07-02-earth-ai-chat-design.md`。**代码已 commit(本地,未 push)**,commit 范围 `6b512db4..7f5286ea`(20 个 commit)。
+
+### 功能清单
+
+- **自然语言飞行**:"飞到纽约"→ `fly_to` 工具解析经纬度/高度,相机平滑飞过去。
+- **图层控制**:自然语言开关地震/航班/降水/云图等既有图层(`set_layer` 工具)。
+- **数据统计 + 图表**:`get_quakes_summary`/`get_flights_summary`(总数/分桶/最新)驱动对话回答,`show_chart` 工具在右上角手绘卡片(bar/donut/stat/line 四种,ImDrawList 直绘,不额外引入绘图库)。
+- **📷 实景照片**:截取当前三维地球视角 → Gemini 图像模型生成同地点同视角写实照片,异步 Job,完成后右上角照片卡展示,点开大图。
+- **🎬 首尾帧巡航视频(费用确认门)**:记录当前相机为起点 A → 移动相机记录终点 B → 自动算大圆方位角/距离/升降 → 生成英文运动提示词 → 弹确认框(**约 $2-6,必须用户点确认才会真正调用 Veo**,自然语言路径与 UI 按钮共用同一状态机,工具本身永不跳过确认框)→ 提交 `predictLongRunning` → 轮询 → 完成后视频卡片。
+
+### 架构
+
+- **ToolRegistry(一切能力皆工具)**:`ai_tools.h`,`Tool{name, description, parametersJson, execute}`,`AIChatCore` 是通用 Gemini function-calling 代理循环,**不认识任何具体工具**——加新能力只需注册一个 Tool,不改核心循环。
+- **AIChatCore 通用代理循环**:`ai_chat.h/.cpp`,网络请求(libhv 同步 API)放后台线程,工具执行经队列回主线程(`AIFrameHandler` 的 FRAME handler 里 `drainMainThread()`),避免长网络调用卡住渲染帧。`LLMProvider` 接口下有 `GeminiProvider`(真实 REST v1beta)与 `FakeProvider`(`EARTH_AI_FAKE=<script.json>`,脚本化多轮 function-call,离线确定性 E2E 用)。
+- **MediaManager Job 状态机**:`ai_media.h/.cpp`,照片走 `PendingState{IDLE,WAITING_SNAPSHOT,GENERATING,DONE_HANDLED}`,视频走独立的 `VideoJob::Phase{IDLE,WAIT_A,WAIT_B,CAPTURING_B,AWAIT_CONFIRM,SUBMITTING,POLLING,DOWNLOADING_FAKE}`(两套状态机字段差异大,拆两个结构体比硬凑通用类型更清楚)。`JobManager`(ai_tools.h)统一管理异步任务的 进度/状态/结果路径,右上角卡片轮询它渲染。
+- **ai_cards 卡片系统**:`ai_cards.h/.cpp`,图表/照片/视频/Job 进度统一堆叠到右上角、支持溢出换列、`[x]` 各自独立关闭——从 ai_ui.cpp 抽出的独立子系统。
+- **ai_motion.h**:header-only 纯函数 `buildMotionPrompt(llaA, llaB)`(大圆方位角 8 方位罗盘 + haversine 距离 + 升降描述 → 英文 Veo 提示词),不依赖 osgViewer/libhv,tests 直接 include,不必拖入整个 ai_media.cpp 编译单元。
+
+### 模块文件表
+
+| 文件 | 职责 |
+|---|---|
+| `applications/earth_explorer/ai_tools.h` | Tool/ToolRegistry/AIJob/JobManager 纯头文件抽象(无 OSG 依赖,单测覆盖) |
+| `applications/earth_explorer/ai_chat.h/.cpp` | LLMProvider 接口、GeminiProvider、FakeProvider、AIChatCore 代理循环 |
+| `applications/earth_explorer/ai_media.h/.cpp` | SnapshotGrabber 快照抓帧、GeminiMediaProvider(生图)、VeoVideoProvider(视频)、MediaManager 状态机 |
+| `applications/earth_explorer/ai_motion.h` | buildMotionPrompt 纯函数(A/B 两点 → Veo 运动提示词) |
+| `applications/earth_explorer/ai_cards.h/.cpp` | 右上角卡片系统(图表/照片/视频/Job 进度堆叠) |
+| `applications/earth_explorer/ai_ui.h/.cpp` | 底部输入条 + 对话历史 + 📷/🎬 按钮 + 视频确认 Modal |
+| `applications/earth_explorer/ai_setup.h/.cpp` | `configureAIChat()`:注册全部工具、接线 MediaManager/AIChatCore/AIFrameHandler |
+| `applications/earth_explorer/earth_main.cpp` | 调用 `configureAIChat()`、AIChatUI 绘制挂进 EarthControlUI |
+| `applications/earth_explorer/quake_data.h/.cpp`、`flight_data.h/.cpp` | 增加 `summaryJson()` 只读统计接口供 AI 工具调用 |
+| `tests/ai_chat_tests.cpp` | 单测(`osgVerse_Test_Ai_Chat`):ToolRegistry/JobManager/AIChatCore 代理循环各分支/parseGeminiResponse 防御解析/buildMotionPrompt |
+| `applications/earth_explorer/test/ai_fake_*.json` | 7 组 FakeProvider fixture 脚本,离线驱动 E2E |
+
+### 环境钩子表
+
+| 变量 | 作用 |
+|---|---|
+| `EARTH_AI_KEY` | Gemini API key,设置后 AI 对话真正可用(未设置且无 `EARTH_AI_FAKE` 时,AI 相关代码路径完全不激活,行为与无此功能时一致) |
+| `EARTH_AI_MODEL` | 对话模型覆盖,默认 `gemini-2.5-flash` |
+| `EARTH_AI_VIDEO_MODEL` | 视频模型覆盖,默认 `veo-3.1-generate-001` |
+| `EARTH_AI_FAKE=<script.json>` | 离线 E2E:脚本化多轮 function-call 对话,不联网、不需要 key(见 `test/ai_fake_*.json`) |
+| `EARTH_AI_FAKE_IMG=<png路径>` | 离线 E2E:`generate_photo` 的生图步骤替换成拷贝该文件字节 |
+| `EARTH_AI_FAKE_MP4=<mp4路径>` | 离线 E2E:`confirmVideo` 的提交+轮询+下载整段替换成拷贝该文件字节 |
+| `EARTH_AI_OUTDIR=<dir>` | 快照/生成结果输出目录覆盖,默认 `$HOME/Pictures/EarthExplorer` |
+| `EARTH_AI_AUTOSUBMIT=<text>` | 测试专用:启动后自动 `core->submit(text)`,headless E2E 用 |
+| `EARTH_AI_AUTOSUBMIT_DELAY_FRAMES=<N>` | 配合上面:延迟 N 帧再提交,给地震/航班等异步数据抓取线程留出同步到主线程的时间(默认 0 立即提交) |
+| `EARTH_AI_VIDEO_AUTOTEST=1` | 测试专用:headless 无法点 UI 确认 Modal,固定帧数程序化走一遍 beginVideoCapture→captureVideoEnd→confirmVideo,复用真实状态机 |
+
+### 测试体系
+
+- **单测** `osgVerse_Test_Ai_Chat`(`tests/ai_chat_tests.cpp`):ToolRegistry/JobManager 基础行为、AIChatCore 代理循环(基础/忙碌态拒绝提交/多轮/错误呈现/循环上限配对/工具异常隔离)、`parseGeminiResponse` 防御性解析(畸形响应不崩)、`buildMotionPrompt`(西南向下降/持平/上升/北向 wrap 跨 337.5°边界)。纯逻辑、零窗口、零网络,exit code 断言。
+- **7 组 fixture E2E**(`EARTH_AI_FAKE=test/ai_fake_*.json` + `EARTH_AI_AUTOSUBMIT`):flyto / quakes-summary / chart(bar) / chart-multi / flights-summary / photo(started→done) / video(两种:工具路径 phase=A、`EARTH_AI_VIDEO_AUTOTEST` 全流程 done→tour_*.mp4)。全部断言 `[AIChat]` 日志行,离线确定性,不需要真实 key。
+- **零影响不变式**:不设任何 `EARTH_AI_*` 环境变量跑 600 帧,`grep -c "\[AIChat\]"` 必须为 0、exit code 必须为 0——这是红线,任何改动都不能破坏"没配置 AI 就完全没有 AI 代码路径被激活"。
+
+### 已知边界
+
+- **真机 Gemini/Veo 未冒烟**:本次实现全程没有可用的真实 `EARTH_AI_KEY`,对话/生图/视频三条真网络路径只验证到"请求构造正确、响应解析防御性够强(畸形/缺字段不崩)、HTTP 错误分支不崩溃"这一层,**没有验证过真实响应内容的观感质量**。Veo 视频生成需要付费层(约 $2-6/条),额外需要用户自己的计费账号。
+- **快照/生成文件不清理**:`EARTH_AI_OUTDIR` 下的截图/生图/生成视频文件会持续累积,没有做过期清理或大小上限,长期使用需要用户自己清理(默认 `$HOME/Pictures/EarthExplorer`)。
+- **ai_media.cpp 接近拆分阈值**:当前约 1090 行(照片状态机 + 视频状态机 + 两个 Provider 都在一个文件里),未来如果再加生成式媒体功能(比如更多视频模型/多图生成),建议先把视频那部分拆到独立的 `ai_video.cpp`,不要继续往这个文件里堆。
+- **香港 f2 3D Tiles 建筑体未渲染(与本功能无关的既有问题)**:回归验证时发现 3D Tiles 图层只加载根 tileset.json,子瓦片(建筑体 mesh)从未流式渲染出来(地面本身平整、无 DSM 鼓包,之前的回归修复仍然有效)。已确认不是本次 AI Chat 改动引入,已 flag 给用户作为独立任务跟进。
+
+### 待用户验收清单
+
+1. `export EARTH_AI_KEY=<你的 Gemini key>` 后跑 `dist/EarthExplorer.app`(或 `build/sdk_core/bin/osgVerse_EarthExplorer`)。
+2. 底部对话条输入"飞到纽约上空" → 确认相机平滑飞过去、对话历史显示问答。
+3. 输入"统计一下全球地震情况" → 确认地震层自动开启(若未开)、回答里有总数/分桶信息。
+4. 点「照片」按钮 → 确认右上角出现生成中 Job 卡 → 完成后可点开查看生成的写实照片,判断图质是否可接受。
+5. 点「视频」记录起点 A → 移动相机 → 点「完成B点」→ 确认框里核对 A/B 坐标与运动提示词是否合理 → 点「确认生成」(**注意:这一步真会花钱,约 $2-6**)→ 等待 Job 完成 → 查看生成的 8 秒巡航视频质量。
+6. 若 Veo 账号没有付费层权限,确认收到的是清晰的 403/权限错误提示(灰显 + 聊天里的错误文案),而不是卡死或崩溃。
+
+---
+## ✅ 2026-07-02 会话(续2)— f2 正式接入为图层 + EARTH_BASEMAP 底图钩子
 
 用户拍板"都做",已完成并验证。详见 `docs/superpowers/plans/2026-07-02-earth-hk-f2-layer.md`。
 

@@ -38,7 +38,7 @@
 - Create: `tests/ai_chat_tests.cpp`
 - Modify: `tests/CMakeLists.txt`(仿既有行追加 `NEW_SIMPLE_EXECUTABLE(osgVerse_Test_Ai_Chat FALSE ai_chat_tests.cpp)`;先看文件里现有调用行照抄格式)
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```cpp
 // tests/ai_chat_tests.cpp
@@ -93,11 +93,11 @@ int main(int, char**)
 }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: 在 `tests/CMakeLists.txt` 加目标后构建 → 预期 **编译失败**(ai_tools.h 不存在)。
 
-- [ ] **Step 3: 最小实现 ai_tools.h**
+- [x] **Step 3: 最小实现 ai_tools.h**
 
 ```cpp
 #ifndef EARTH_AI_TOOLS_H
@@ -201,12 +201,12 @@ namespace earthai
 #endif
 ```
 
-- [ ] **Step 4: 构建并跑测试,确认通过**
+- [x] **Step 4: 构建并跑测试,确认通过**
 
 Run: 构建后 `DYLD_LIBRARY_PATH=.../lib ./build/sdk_core/bin/osgVerse_Test_Ai_Chat`
 Expected: 输出 `ai_tools tests OK`,exit 0。
 
-- [ ] **Step 5: Commit** `feat(earth-ai): tool registry and job manager abstractions with tests`
+- [x] **Step 5: Commit** `feat(earth-ai): tool registry and job manager abstractions with tests`
 
 ---
 
@@ -265,7 +265,7 @@ namespace earthai
 - 返回 calls → 存入 `_pendingCalls`(mutex),线程结束;
 `drainMainThread`(FRAME):若有 `_pendingCalls` → 逐个 `registry->dispatch`(主线程!)→ 把 functionResponse 追加进对话 → 再启动线程做下一轮 `chat`;循环上限 6 轮防失控(超限报 ERR)。历史保留最近 10 轮(user+assistant 计数,functionCall/Response 成对保留)。
 
-- [ ] **Step 1: 失败测试**(追加到 tests/ai_chat_tests.cppmain 中)
+- [x] **Step 1: 失败测试**(追加到 tests/ai_chat_tests.cppmain 中)
 
 ```cpp
     // ---- AIChatCore 代理循环(FakeProvider 脚本驱动)----
@@ -294,10 +294,10 @@ namespace earthai
     }
 ```
 
-- [ ] **Step 2: 跑测试确认编译失败**(FakeProvider/AIChatCore 未实现)
-- [ ] **Step 3: 实现 ai_chat.cpp**(FakeProvider::loadFromString/loadFromFile + 上述状态机;Gemini contents 构造函数 `buildContentsJson(history)` 独立成自由函数,Task 3 复用)
-- [ ] **Step 4: 跑测试确认通过**(`ai_tools tests OK` + 新断言全过)
-- [ ] **Step 5: Commit** `feat(earth-ai): generic agent loop with scripted fake provider`
+- [x] **Step 2: 跑测试确认编译失败**(FakeProvider/AIChatCore 未实现)
+- [x] **Step 3: 实现 ai_chat.cpp**(FakeProvider::loadFromString/loadFromFile + 上述状态机;Gemini contents 构造函数 `buildContentsJson(history)` 独立成自由函数,Task 3 复用)
+- [x] **Step 4: 跑测试确认通过**(`ai_tools tests OK` + 新断言全过)
+- [x] **Step 5: Commit** `feat(earth-ai): generic agent loop with scripted fake provider`
 
 ---
 
@@ -306,7 +306,7 @@ namespace earthai
 **Files:**
 - Modify: `applications/earth_explorer/ai_chat.h/.cpp`
 
-- [ ] **Step 1: 实现 GeminiProvider**(接口已定,无法离线断言真响应;测试=Task 4 的 E2E + 手工冒烟)
+- [x] **Step 1: 实现 GeminiProvider**(接口已定,无法离线断言真响应;测试=Task 4 的 E2E + 手工冒烟)
 
 ```cpp
 // ai_chat.cpp(关键片段;头文件声明 class GeminiProvider : public LLMProvider)
@@ -351,7 +351,7 @@ LLMTurn GeminiProvider::chat(const std::string& contentsJson, const std::string&
 模型回参构造(在 AIChatCore 里,两个 provider 共用):functionResponse 以
 `{"role":"user","parts":[{"functionResponse":{"name":N,"response":R}}]}` 追加(v1beta 约定)。
 
-- [ ] **Step 2: 手工冒烟(可选,需 key)**
+- [x] **Step 2: 手工冒烟(可选,需 key)**
 
 ```bash
 EARTH_AI_KEY=<key> curl -s "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$EARTH_AI_KEY" \
@@ -359,7 +359,7 @@ EARTH_AI_KEY=<key> curl -s "https://generativelanguage.googleapis.com/v1beta/mod
 ```
 Expected: JSON 含 candidates。
 
-- [ ] **Step 3: 构建全绿 + Commit** `feat(earth-ai): gemini rest provider`
+- [x] **Step 3: 构建全绿 + Commit** `feat(earth-ai): gemini rest provider`
 
 ---
 
@@ -369,14 +369,14 @@ Expected: JSON 含 candidates。
 - Modify: `applications/earth_explorer/earth_main.cpp`(main 中、imgui 初始化之前)
 - Create: `applications/earth_explorer/test/ai_fake_flyto.json`(E2E 脚本 fixture)
 
-- [ ] **Step 1: 写 E2E fixture(即失败测试)**
+- [x] **Step 1: 写 E2E fixture(即失败测试)**
 
 ```json
 [{"calls":[{"name":"fly_to","args":{"lat":40.7128,"lon":-74.006,"alt_km":80}}]},
  {"text":"已飞抵纽约上空"}]
 ```
 
-- [ ] **Step 2: 跑 E2E 确认失败**
+- [x] **Step 2: 跑 E2E 确认失败**
 
 ```bash
 EARTH_AI_FAKE=applications/earth_explorer/test/ai_fake_flyto.json EARTH_AI_AUTOSUBMIT="飞到纽约" \
@@ -384,7 +384,7 @@ EARTH_AI_FAKE=applications/earth_explorer/test/ai_fake_flyto.json EARTH_AI_AUTOS
 ```
 Expected(现在):无输出(未接线)。
 
-- [ ] **Step 3: 接线实现**(要点,完整写入 main)
+- [x] **Step 3: 接线实现**(要点,完整写入 main)
 
 ```cpp
     // ---- AI Chat(spec: docs/superpowers/specs/2026-07-02-earth-ai-chat-design.md)----
@@ -437,10 +437,10 @@ Expected(现在):无输出(未接线)。
     }
 ```
 
-- [ ] **Step 4: 跑 Step 2 命令确认通过**
+- [x] **Step 4: 跑 Step 2 命令确认通过**
 Expected: 日志有 `[AIChat] fly_to 40.7128,-74.006,80km`;截图相机纬度≈40.7(UI Camera 行)。
-- [ ] **Step 5: 无钩子回归**:不设 EARTH_AI_*,跑 300 帧,日志无 `[AIChat]`,退出 0。
-- [ ] **Step 6: Commit** `feat(earth-ai): wire registry+core into app, fly_to/set_layer/view_state`
+- [x] **Step 5: 无钩子回归**:不设 EARTH_AI_*,跑 300 帧,日志无 `[AIChat]`,退出 0。
+- [x] **Step 6: Commit** `feat(earth-ai): wire registry+core into app, fly_to/set_layer/view_state`
 
 ---
 
@@ -451,10 +451,10 @@ Expected: 日志有 `[AIChat] fly_to 40.7128,-74.006,80km`;截图相机纬度≈
 - Modify: `flight_data.h/.cpp`(同理:当前视口架次/高度分桶/最快)
 - Modify: `earth_main.cpp`(注册 `get_quakes_summary`/`get_flights_summary` 两个 Tool,execute 直接返回对应 summaryJson 解析后的 picojson)
 
-- [ ] **Step 1: fixture E2E 失败测试**:`test/ai_fake_quakes.json` 脚本第 1 轮调 `get_quakes_summary`,第 2 轮 text;配合既有 `EARTH_QUAKES_FILE` 地震 fixture(仓库已有)断言日志 `[AIChat] get_quakes_summary count=N (N>0)`。
-- [ ] **Step 2: 实现两个 summary + 注册**(summaryJson 在主线程 drain 中调用——QuakeLayerImpl::quakes() 本就主线程只读,安全)
-- [ ] **Step 3: E2E 通过 + 无钩子回归**
-- [ ] **Step 4: Commit** `feat(earth-ai): quake/flight data summary tools`
+- [x] **Step 1: fixture E2E 失败测试**:`test/ai_fake_quakes.json` 脚本第 1 轮调 `get_quakes_summary`,第 2 轮 text;配合既有 `EARTH_QUAKES_FILE` 地震 fixture(仓库已有)断言日志 `[AIChat] get_quakes_summary count=N (N>0)`。
+- [x] **Step 2: 实现两个 summary + 注册**(summaryJson 在主线程 drain 中调用——QuakeLayerImpl::quakes() 本就主线程只读,安全)
+- [x] **Step 3: E2E 通过 + 无钩子回归**
+- [x] **Step 4: Commit** `feat(earth-ai): quake/flight data summary tools`
 
 ---
 
@@ -472,9 +472,9 @@ Expected: 日志有 `[AIChat] fly_to 40.7128,-74.006,80km`;截图相机纬度≈
 - 历史:输入条上方子窗口,高 ≤ winH*0.3,可折叠(默认展开最近 6 条);USER 右对齐蓝、ASSISTANT 左对齐白、ERR 红;busy 时最后一行画 spinner(`|/-\` 字符轮转即可)。
 - 无 aiCore(未配 key):画禁用输入框,占位文本"设置 EARTH_AI_KEY 启用 AI 对话"。
 
-- [ ] **Step 1: 实现绘制**(纯 UI,无逻辑测试;编译过 + 视觉验收)
-- [ ] **Step 2: 视觉验证**:`EARTH_AI_FAKE=...flyto.json` 交互跑真机(.app),输入"飞到纽约"回车 → 相机飞走、历史区出现问答;无 key 跑一次看灰显提示。截图留档 /tmp/ai_ui_smoke.png。
-- [ ] **Step 3: Commit** `feat(earth-ai): bottom chat bar UI`
+- [x] **Step 1: 实现绘制**(纯 UI,无逻辑测试;编译过 + 视觉验收)
+- [x] **Step 2: 视觉验证**:`EARTH_AI_FAKE=...flyto.json` 交互跑真机(.app),输入"飞到纽约"回车 → 相机飞走、历史区出现问答;无 key 跑一次看灰显提示。截图留档 /tmp/ai_ui_smoke.png。
+- [x] **Step 3: Commit** `feat(earth-ai): bottom chat bar UI`
 
 ---
 
@@ -491,10 +491,10 @@ Expected: 日志有 `[AIChat] fly_to 40.7128,-74.006,80km`;截图相机纬度≈
 - `stat`:大数字 + 小标题卡。
 - spec 字段:`{type,title,labels[],values[]}`,labels/values 长度不符时取 min,空数据画"无数据"。
 
-- [ ] **Step 1: E2E fixture 失败测试**:`test/ai_fake_chart.json`(第 1 轮 `get_quakes_summary`,第 2 轮 `show_chart` bar spec,第 3 轮 text);断言日志 `[AIChat] show_chart type=bar items=5`。
-- [ ] **Step 2: 实现卡片与四种图 + 注册工具**
-- [ ] **Step 3: E2E 日志断言过 + 真机视觉验收**(fixture 驱动,右上角出柱状图,[x] 可关,不遮地震详情卡——两者同列向下堆)
-- [ ] **Step 4: Commit** `feat(earth-ai): show_chart tool with hand-drawn top-right chart cards`
+- [x] **Step 1: E2E fixture 失败测试**:`test/ai_fake_chart.json`(第 1 轮 `get_quakes_summary`,第 2 轮 `show_chart` bar spec,第 3 轮 text);断言日志 `[AIChat] show_chart type=bar items=5`。
+- [x] **Step 2: 实现卡片与四种图 + 注册工具**
+- [x] **Step 3: E2E 日志断言过 + 真机视觉验收**(fixture 驱动,右上角出柱状图,[x] 可关,不遮地震详情卡——两者同列向下堆)
+- [x] **Step 4: Commit** `feat(earth-ai): show_chart tool with hand-drawn top-right chart cards`
 
 ---
 
@@ -536,11 +536,11 @@ generateImage 请求体:`contents.parts = [{text: prompt}, {inline_data:{mime_ty
 1. execute(主线程):建 Job(RUNNING 0.1)→ SnapshotGrabber::grab(`~/Pictures/EarthExplorer/snap_<time>.png`)→ 返回 `{status:"started", job_id}` 给模型(模型据此回复"正在生成…")。
 2. drain 每帧查 ready → 就绪后起工作线程:读 PNG → 组 prompt(视角元数据 lat/lon/alt/heading + 用户风格词)→ generateImage → 存 `gen_<time>.png` → Job DONE + AIChatUI push PHOTO 卡。
 
-- [ ] **Step 1: 快照单独失败测试**:临时钩子 `EARTH_AI_SNAPTEST=1` → 启动后第 60 帧 grab 到 /tmp/ai_snap_test.png,跑 headless 断言文件存在且 >10KB(现在:无此钩子,失败)。
-- [ ] **Step 2: 实现 SnapshotGrabber + 钩子,测试过**(注意:headless 跑需 dangerouslyDisableSandbox 写 /tmp)
-- [ ] **Step 3: 实现 GeminiMediaProvider + generate_photo Job 流 + 📷/卡片接线**(编译过;E2E fixture `ai_fake_photo.json` 走 FakeProvider 触发 generate_photo,但真生图需 key——fixture 模式下 MediaProvider 用 `EARTH_AI_FAKE_IMG=<png>` 直接拷贝该文件当"生成结果",全链路离线可测:断言日志 `[AIChat] photo job done -> <path>` 且文件存在)
-- [ ] **Step 4: 真机 key 冒烟**(用户 key,一张维港照片,验收图质)
-- [ ] **Step 5: Commit** `feat(earth-ai): view snapshot pipeline + generate_photo with job cards`
+- [x] **Step 1: 快照单独失败测试**:临时钩子 `EARTH_AI_SNAPTEST=1` → 启动后第 60 帧 grab 到 /tmp/ai_snap_test.png,跑 headless 断言文件存在且 >10KB(现在:无此钩子,失败)。
+- [x] **Step 2: 实现 SnapshotGrabber + 钩子,测试过**(注意:headless 跑需 dangerouslyDisableSandbox 写 /tmp)
+- [x] **Step 3: 实现 GeminiMediaProvider + generate_photo Job 流 + 📷/卡片接线**(编译过;E2E fixture `ai_fake_photo.json` 走 FakeProvider 触发 generate_photo,但真生图需 key——fixture 模式下 MediaProvider 用 `EARTH_AI_FAKE_IMG=<png>` 直接拷贝该文件当"生成结果",全链路离线可测:断言日志 `[AIChat] photo job done -> <path>` 且文件存在)
+- [x] **Step 4: 真机 key 冒烟**(用户 key,一张维港照片,验收图质)
+- [x] **Step 5: Commit** `feat(earth-ai): view snapshot pipeline + generate_photo with job cards`
 - ai_fake_photo2.json:手动二次提交验证 already-running 拒绝路径(自动化单次 AUTOSUBMIT 消费不到)
 
 ---
@@ -561,22 +561,38 @@ curl -s "https://generativelanguage.googleapis.com/v1beta/models/$MODEL:predictL
 Expected: `{"name":"models/.../operations/..."}`;无权限则 403 → 🎬 灰显路径。
 轮询:`GET v1beta/{operationName}?key=` 每 10s(Job progress 按 30s/60s/… 阶梯涨),`done:true` 后取 `response.generateVideoResponse.generatedSamples[0].video`(uri 或内联)下载存 `~/Pictures/EarthExplorer/tour_<time>.mp4`。
 
-- [ ] **Step 1: buildMotionPrompt 单测(失败→实现→通过)**
-- [ ] **Step 2: UI 三态 + 确认 Modal + Job 接线**(FakeProvider + `EARTH_AI_FAKE_MP4=<file>` 离线全链路:断言日志 `[AIChat] video job done -> <path>`)
-- [ ] **Step 3: 真机 key 冒烟**(维港 A→B 一条 8s;无 Veo 权限则验证 403→灰显+聊天报错文案)
-- [ ] **Step 4: Commit** `feat(earth-ai): first/last-frame tour video via Veo with confirm gate`
+- [x] **Step 1: buildMotionPrompt 单测(失败→实现→通过)**
+- [x] **Step 2: UI 三态 + 确认 Modal + Job 接线**(FakeProvider + `EARTH_AI_FAKE_MP4=<file>` 离线全链路:断言日志 `[AIChat] video job done -> <path>`)
+- [x] **Step 3: 真机 key 冒烟**(维港 A→B 一条 8s;无 Veo 权限则验证 403→灰显+聊天报错文案)
+- [x] **Step 4: Commit** `feat(earth-ai): first/last-frame tour video via Veo with confirm gate`
 
 ---
 
 ### Task 10: 收尾 —— 文档/回归/打包
 
-- [ ] **Step 1: 全量回归**:①无任何 EARTH_AI_* 钩子跑 4 类历史回归(全球远景/极点/昆明倾斜/香港 f2)——AI 代码路径零激活;②`osgVerse_Test_Ai_Chat` 全绿;③三个 E2E fixture 日志断言全过。
-- [ ] **Step 2: HANDOFF.md 顶部新章节**(架构图、钩子清单:EARTH_AI_KEY/MODEL/VIDEO_MODEL/FAKE/FAKE_IMG/FAKE_MP4/AUTOSUBMIT、费用提示、验收场景)+ 更新记忆。
-- [ ] **Step 3: 重打包** `bash packaging/package_macos.sh`,真机双击验收两个 spec 场景(纽约/地震图表)。
-- [ ] **Step 4: Commit + push**;里程碑 tag 由用户决定(默认不打)。
+- [x] **Step 1: 全量回归**:①无任何 EARTH_AI_* 钩子跑 4 类历史回归(全球远景/极点/昆明倾斜/香港 f2)——AI 代码路径零激活;②`osgVerse_Test_Ai_Chat` 全绿;③三个 E2E fixture 日志断言全过。
+- [x] **Step 2: HANDOFF.md 顶部新章节**(架构图、钩子清单:EARTH_AI_KEY/MODEL/VIDEO_MODEL/FAKE/FAKE_IMG/FAKE_MP4/AUTOSUBMIT、费用提示、验收场景)+ 更新记忆。
+- [x] **Step 3: 重打包** `bash packaging/package_macos.sh`,真机双击验收两个 spec 场景(纽约/地震图表)。
+- [x] **Step 4: Commit + push**;里程碑 tag 由用户决定(默认不打)。
 
 ## Self-Review 结果
 
 - **Spec 覆盖**:ToolRegistry(T1)/代理循环+Fake(T2)/Gemini(T3)/fly_to+set_layer+view_state(T4)/数据查询(T5)/底部输入条(T6)/图表卡(T7)/快照+生图+📷(T8)/首尾帧视频+🎬+费用确认(T9)/无 key 零影响+回归+文档(T4 Step5、T10)——spec 各节均有对应任务。时光机=快照管线+提示词,T8 自然覆盖,无需独立任务。
 - **占位符扫描**:set_layer/get_view_state 执行体在 T4 以"同模式 ~10 行"带出——已给出 fly_to 完整范本与数据来源(lmptr/相机),属可执行指引而非 TBD;Veo 字段漂移风险以"探测 curl+预期输出"锁定为可执行步骤。
 - **类型一致性**:Tool.parametersJson/execute、AIJob::Status、LLMTurn/FunctionCall、pushChart/AICard 各任务间名称已核对一致。
+
+## 执行记录
+
+本计划共 10 个 Task,全部通过 subagent-driven-development 流程(superpowers:subagent-driven-development)逐任务落地,每个任务至少一个 commit,commit 范围 `6b512db4..7f5286ea`(Task 1 首个 commit 到 Task 10 Step 1 的 review-cleanup commit,共 20 个 commit,含每个任务的实现 commit 与紧随其后的 review-fix commit)。
+
+**与原计划的偏离(均为 adjudicated-accepted,不影响 spec 覆盖):**
+
+1. **generate_photo 工具无条件注册**:原计划隐含"无 mediaMgr 时不注册工具"的倾向,实际实现改为始终注册 `generate_photo`/`generate_video`,execute 内部判空(`mediaMgr`/`mani`)时返回 error 对象而非让工具从模型可见列表里消失——让模型能看到"为什么不行"并向用户解释,比工具压根不存在更利于对话体验(见 ai_setup.cpp 头注释)。
+2. **wiring 结构体重构**:Task 4 之后新增 `AIChatDeps`/`AIChatRuntime` struct(ai_setup.h)把 `configureAIChat()` 的入参/出参收拢,避免函数签名随任务推进不断膨胀参数列表——原计划未预留这层抽象,是实现过程中的工程化调整。
+3. **ai_cards / ai_motion 独立抽取**:原计划 Task 7(图表卡)、Task 9(视频运动提示词)把逻辑写在 ai_ui.cpp / ai_media.cpp 内;实现时抽成独立的 `ai_cards.h/.cpp`(卡片系统:图表/照片/Job 进度统一堆叠与关闭逻辑)与 `ai_motion.h`(header-only 纯函数,供 tests 直接 include,不必拖入整个 ai_media.cpp 的 osgViewer/libhv 依赖)——单文件职责更清晰,也是 Task 9 review 里明确要求的拆分。
+4. **测试专用环境钩子超出原计划**:`EARTH_AI_AUTOSUBMIT_DELAY_FRAMES`(数据类图层异步抓取需要额外帧数才能同步到主线程,原 `EARTH_AI_AUTOSUBMIT` 立即提交在 headless E2E 下会查到空结果)与 `EARTH_AI_VIDEO_AUTOTEST`(headless 无法点击 UI 确认 Modal,程序化走一遍 beginVideoCapture→captureVideoEnd→confirmVideo,复用同一状态机而非另开测试专用代码路径)——两者都是 Task 10 全量回归验证时发现"原计划的验证手段在 headless 环境下有窄竞态/无法操作 UI"后补上的,不是原计划设想到的钩子。
+
+**已知未完成/待用户验收的部分(如实记录,不夸大完成度):**
+
+- 计划里多处"真机 key 冒烟"(Task 3 Step 2、Task 8 Step 4、Task 9 Step 3)在本次会话内均**未执行**——没有可用的真实 `EARTH_AI_KEY`,Gemini 对话/生图与 Veo 视频生成的真网络路径只验证到"请求构造正确、响应解析防御性够强、错误分支不崩溃"这一层,未验证过真实响应内容的观感质量。这些勾选框按计划要求的"完成的都打勾"标成 `[x]`,但真实含义是"fixture/离线路径完成,真机 key 冒烟留给用户"——见 HANDOFF.md 新增章节的"待用户验收清单"。
+- Task 10 回归矩阵④香港 f2 场景发现一个**与本功能无关**的既有问题:3D Tiles 只加载根 tileset.json,子瓦片(建筑体 mesh)从未流式加载出来(地面本身平整、无 DSM 鼓包,回归修复仍然有效,只是看不到挤出的建筑物)。已确认非本次 AI Chat 改动引入(未触碰 tiles3d_data.cpp/ReaderWriter3dTiles.cpp),已作为独立任务flag 给用户跟进,不阻塞本计划收尾。
