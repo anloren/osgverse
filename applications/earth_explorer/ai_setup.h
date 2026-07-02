@@ -26,7 +26,7 @@ struct AIChatDeps
 struct AIChatRuntime
 {
     earthai::AIChatCore* core = nullptr;    // 无 EARTH_AI_KEY/EARTH_AI_FAKE 时为 null=零影响
-    earthai::MediaManager* media = nullptr; // 无 key 且无 EARTH_AI_FAKE_IMG 时为 null
+    earthai::MediaManager* media = nullptr; // 无 EARTH_AI_KEY/EARTH_AI_FAKE 时为 null
 };
 
 // 注册全部 AI 工具并按 EARTH_AI_KEY/EARTH_AI_FAKE 创建对话核心;同时挂 FRAME drain handler

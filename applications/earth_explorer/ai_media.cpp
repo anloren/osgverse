@@ -9,7 +9,9 @@
 #include <osgDB/FileUtils>
 #include <osg/Notify>
 #include <algorithm>
+#include <atomic>
 #include <fstream>
+#include <memory>
 #include <sstream>
 #include <cstdlib>
 #include <ctime>
@@ -479,6 +481,17 @@ namespace earthai
         int pollTicks = 0;           // POLLING 阶段累计经过的 tick 数(用于超时判定与进度爬升)
         int ticksSinceLastPoll = 0;  // 距上一次发起轮询过去的 tick 数,达到 kPollIntervalTicks 才发下一次 GET
         bool pollInFlight = false;   // 当前是否有一次轮询 worker 正在跑(避免同时发出两个 GET)
+
+        // bug fix:一个"已经跑完但还没被主线程 join"的 std::thread 仍然 joinable()——
+        // 之前用 "!v.worker.joinable()" 当"worker 已完成"的信号是错的,join() 之前它永远
+        // 是 true,导致 pollInFlight 永远不清零、后续轮询被 :994 的守卫永久拦住(真实 Veo
+        // 任务必然撞 10 分钟超时)。改用 worker 主动写的完成标志位 pollDone 来判断。
+        // std::atomic<bool> 本身不可移动,而 resetVideo() 里 "*_video = VideoJob()" 是
+        // move-assign(std::thread 成员要求),两者冲突;这里选"共享指针包一层"的方案——
+        // 侵入最小:VideoJob 依旧可移动/可默认重置,resetVideo() 的"先 join 再整体赋值"
+        // 语义不用改。每次起一次新的轮询 worker 前重新 make_shared 一个新 flag(而不是复用
+        // 旧的),避免上一轮遗留的 flag 对象被下一轮误读。
+        std::shared_ptr<std::atomic<bool>> pollDone = std::make_shared<std::atomic<bool>>(false);
     };
 
     MediaManager::MediaManager(osgViewer::Viewer* viewer, AICardPanel* cards, const std::string& apiKeyOrEmpty)
@@ -967,19 +980,46 @@ namespace earthai
                     resetVideo();
                     return;
                 }
-                // status 仍是 RUNNING 且没有失败/完成信号 -> 上一次轮询判定"仍在跑"(operation
-                // 还没 done:true),worker 已返回但没有更新 job(见 poll worker lambda 里
-                // "!done 直接 return"的分支),这里靠 pollInFlight 标志判断 worker 是否已退出——
-                // 若线程已经 joinable 完成(不再 joinable 或已 join 过),说明这轮询问结束了,
-                // 可以把 pollInFlight 清掉,等下一个轮询间隔再发起。简化处理:直接 join(阻塞
-                // 极短,worker 早已返回)判断。
-                if (!v.worker.joinable()) v.pollInFlight = false;
+                // status 仍是 RUNNING 且没有失败/完成信号 -> 本轮 poll worker 要么还在飞
+                // (还没 GET 完成),要么已经返回但判定"operation 仍在跑"(done:false,worker
+                // lambda 里那条 "!done 直接 return" 分支,不触碰 job)。
+                //
+                // bug fix:这里不能再用 "!v.worker.joinable()" 当"worker 已经跑完"的信号——
+                // std::thread 只要执行体还没被 join() 过,joinable() 就一直是 true,跟它的
+                // 函数体是否已经跑完毫无关系(线程结束运行 ≠ 变得不可 join,那要等 std::thread
+                // 对象被 join() 或 detach())。旧代码这里读到的永远是 true,pollInFlight 永远
+                // 清不掉,下面 :1007 的 "if (v.pollInFlight || ...) return;" 就会永久拦住后续
+                // 轮询——真实网络下第一次 GET 返回 done:false 之后,整个任务就再也不会发起
+                // 第二次轮询,只能干等到 10 分钟超时(此时 Veo 那边任务其实可能已经生成完毕,
+                // 白花钱)。
+                //
+                // 改用 worker 主动写的完成标志 pollDone(std::atomic<bool>,worker lambda 的
+                // 最后一步就是把它置 true,见下方新 worker 里的 doneFlag->store(true))——
+                // 无论 poll() 判定 done 还是仍在跑,只要 lambda 本身执行完毕就会置位,这才是
+                // "worker 已返回、可以安全 join"的真实信号。置位后 join 回收线程、清零
+                // pollInFlight 和 pollDone,下一个轮询间隔到了自然会再起一个新 worker——
+                // 也就是本次修复之后轮询变成真正可重复的了(spawn → 置位 → join+清 →
+                // 下一个 interval 再 spawn)。
+                if (v.pollDone->load())
+                {
+                    if (v.workerJoinable && v.worker.joinable()) v.worker.join();
+                    v.workerJoinable = false;
+                    v.pollInFlight = false;
+                    v.pollDone->store(false);
+                }
             }
 
-            // 进度条在等待轮询期间缓慢爬升(0.3~0.8,阶梯式,给用户"仍在进行"的观感),
-            // 真正的完成/失败以上面轮询结果为准。
+            // 进度条在等待轮询期间缓慢爬升(0.3~0.8,阶梯式,给用户"仍在进行"的观感)。
+            // bug fix:这里原先直接 _jobs.update(v.jobId, RUNNING, ..., "", "") 会把 status
+            // 强行写成 RUNNING——如果恰好在这次 update() tick 与上面 pollInFlight 分支之间,
+            // 后台 poll worker 刚把 job 写成 DONE/FAILED(比如轮询间隔到了、worker 已经拿到
+            // 结果,但这次 tick 走到这里时上面 pollInFlight 判断还没来得及看到新状态——两次
+            // 独立的加锁操作之间不是原子的),这行 creep 就会把已经完成/失败的 status 又
+            // 覆盖回 RUNNING,导致 UI 卡片"完成后又变回进行中"甚至掩盖失败原因。
+            // JobManager::creepProgress() 把"读 status 是否 RUNNING"和"写 progress"放进
+            // 同一次加锁,对 RUNNING 之外的状态直接跳过、不做任何修改,消除这个竞态。
             float creepFrac = std::min(1.0f, (float)v.pollTicks / (float)kPollTimeoutTicks);
-            _jobs.update(v.jobId, AIJob::RUNNING, 0.3f + 0.5f * creepFrac, "", "");
+            _jobs.creepProgress(v.jobId, 0.3f + 0.5f * creepFrac);
 
             if (v.pollTicks > kPollTimeoutTicks)
             {
@@ -999,14 +1039,30 @@ namespace earthai
             if (v.workerJoinable && v.worker.joinable()) v.worker.join();
             v.ticksSinceLastPoll = 0;
             v.pollInFlight = true;
+            // 新开一轮轮询就换一个新的 pollDone(而不是复用/清零旧对象):shared_ptr 本身
+            // 保证了"worker 捕获的是这一轮专属的 flag",即便未来某处逻辑变化导致上一轮的
+            // flag 还有其它持有者在读,也不会跟这一轮混淆。当前 worker lambda 结束时把它
+            // 置 true 就是本节点新增的"worker 已返回"信号(见上面 POLLING 分支里的用法)。
+            v.pollDone = std::make_shared<std::atomic<bool>>(false);
             std::string apiKey = _apiKey;
             std::string model = videoModel();
             std::string opName = v.operationName;
             std::string mp4Path = v.mp4Path;
             int jobId = v.jobId;
             JobManager* jobsPtr = &_jobs;
-            v.worker = std::thread([apiKey, model, opName, mp4Path, jobId, jobsPtr]()
+            std::shared_ptr<std::atomic<bool>> doneFlag = v.pollDone;
+            v.worker = std::thread([apiKey, model, opName, mp4Path, jobId, jobsPtr, doneFlag]()
             {
+                // RAII 收尾:无论下面哪条分支 return,都保证最后一步是把 doneFlag 置位——
+                // 这是主线程判断"这次轮询 worker 已经跑完、可以安全 join"的唯一依据
+                // (std::thread::joinable() 不能用来判断线程函数体是否执行完毕,见上方
+                // POLLING 分支里的详细注释)。
+                struct DoneSetter
+                {
+                    std::shared_ptr<std::atomic<bool>> flag;
+                    ~DoneSetter() { flag->store(true); }
+                } doneSetter{doneFlag};
+
                 VeoVideoProvider provider(apiKey, model);
                 bool done = false; std::string mp4Bytes, err;
                 try { provider.poll(opName, done, mp4Bytes, err); }

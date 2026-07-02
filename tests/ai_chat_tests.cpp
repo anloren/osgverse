@@ -85,6 +85,24 @@ int main(int, char**)
         CHECK(jm.get(id, snap));
         CHECK(snap.status == AIJob::RUNNING);
         CHECK(snap.progress > 0.4f);
+
+        // 4b) JobManager::creepProgress(review 修复:视频轮询进度爬升与 worker 写 DONE/FAILED
+        // 的竞态)—— RUNNING 时能推进 progress 且返回 true;job 变成 DONE 之后再调用必须
+        // 原样保留 DONE、不得被"进度爬升"这种意图之外的调用悄悄拉回 RUNNING,且返回 false
+        // 告诉调用方"这次没有生效"。
+        CHECK(jm.creepProgress(id, 0.7f) == true);
+        CHECK(jm.get(id, snap));
+        CHECK(snap.status == AIJob::RUNNING);
+        CHECK(snap.progress > 0.65f);
+
+        jm.update(id, AIJob::DONE, 1.0f, "/tmp/out.mp4", "");
+        CHECK(jm.creepProgress(id, 0.9f) == false);
+        CHECK(jm.get(id, snap));
+        CHECK(snap.status == AIJob::DONE);          // 必须仍是 DONE,没有被 creep 打回 RUNNING
+        CHECK(snap.progress > 0.99f);                // progress 也没被 creep 的 0.9f 覆盖
+
+        // 不存在的 job id 同样应该安全返回 false,不崩溃。
+        CHECK(jm.creepProgress(id + 999, 0.5f) == false);
         std::cout << "ai_tools tests OK\n";
     }
 

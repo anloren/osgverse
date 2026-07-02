@@ -87,6 +87,21 @@ namespace earthai
             std::map<int, AIJob>::const_iterator it = _jobs.find(id);
             if (it == _jobs.end()) return false; out = it->second; return true;
         }
+        // 仅推进"进行中"的进度条,不触碰 status/resultPath/error——供主线程每帧"进度爬升"
+        // 用,与后台 worker 写 DONE/FAILED 的 update() 调用天然互斥于同一把锁下:worker 若已经
+        // 把 status 改成 DONE/FAILED,这里读到的 status 就不是 RUNNING,直接跳过、不会把已经
+        // 完成的任务重新"看起来还在跑"(get 一次+update 一次这种 read-modify-write 不在锁内
+        // 完成的话,中间可能被 worker 的 update() 插入,导致 status 被这次 creep 覆盖回
+        // RUNNING——本方法把判断和写入放进同一次加锁,消除这个竞态)。
+        // 返回值:true=确实推进了(仍是 RUNNING);false=job 不存在或已不是 RUNNING(未做任何修改)。
+        bool creepProgress(int id, float progress)
+        {
+            std::lock_guard<std::mutex> g(_mutex);
+            std::map<int, AIJob>::iterator it = _jobs.find(id);
+            if (it == _jobs.end() || it->second.status != AIJob::RUNNING) return false;
+            it->second.progress = progress;
+            return true;
+        }
         std::vector<AIJob> list() const
         {
             std::lock_guard<std::mutex> g(_mutex);
