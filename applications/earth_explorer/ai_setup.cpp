@@ -68,33 +68,42 @@ public:
     }
 };
 
-earthai::AIChatCore* configureAIChat(osgViewer::Viewer& viewer,
-                                     osgVerse::EarthManipulator* mani,
-                                     LayerManager* layerMgr,
-                                     QuakeLayer* quakeLayer, FlightLayer* flightLayer,
-                                     AIChatUI* ui,
-                                     earthai::MediaManager** outMedia)
+AIChatRuntime configureAIChat(const AIChatDeps& deps)
 {
-    if (outMedia) *outMedia = nullptr;
+    osgViewer::Viewer& viewer = *deps.viewer;
+    osgVerse::EarthManipulator* mani = deps.mani;
+    LayerManager* layerMgr = deps.layers;
+    QuakeLayer* quakeLayer = deps.quakes;
+    FlightLayer* flightLayer = deps.flights;
+    AIChatUI* ui = deps.ui;
+    AIChatRuntime runtime;
     // ---- AI Chat（spec: docs/superpowers/specs/2026-07-02-earth-ai-chat-design.md）----
     // 无 EARTH_AI_KEY 且无 EARTH_AI_FAKE → aiCore 为空，后续全部跳过，零影响。
     // registry/aiCore 用裸指针、进程生命周期存活，与本文件其余单例/裸 new 风格一致。
     earthai::ToolRegistry* aiRegistry = new earthai::ToolRegistry;
     earthai::AIChatCore* aiCore = nullptr;
 
-    // MediaManager(Task 8 快照+生图管线)先于 aiRegistry 构造完:generate_photo 工具的
-    // execute 需要捕获它的指针。EARTH_AI_KEY 在这里先读一次(下面 aiCore 构造再读一次
+    // MediaManager(Task 8 快照+生图管线)先于 aiRegistry 构造完:generate_photo/generate_video
+    // 工具的 execute 需要捕获它的指针。EARTH_AI_KEY 在这里先读一次(下面 aiCore 构造再读一次
     // 不冲突,getenv 本身可重复调用);EARTH_AI_FAKE_IMG 的读取封装在 MediaManager 内部
-    // (ai_media.cpp::fakeImgPath),此处只需知道"要不要 new"——用同样的条件判断。
+    // (ai_media.cpp::fakeImgPath),此处只需知道"要不要 new"。
+    // PART A 审查修复:原条件只看 (有 key || 有 FAKE_IMG),没考虑 aiCore 是否真的会被创建——
+    // 若只设了 EARTH_AI_FAKE_IMG 而没设 EARTH_AI_KEY/EARTH_AI_FAKE,aiCore 下面仍会保持
+    // null(FakeProvider 需要 EARTH_AI_FAKE 脚本,不是 FAKE_IMG),导致 mediaMgr 被 new 出来
+    // 却从未挂上 AIFrameHandler(update() 永远不被调用)、也没有 generate_photo/video 工具
+    // 可触发它——一个"活不起来"的死对象外加一根不会触发的 UI 引用。这里改成与"aiCore 是否
+    // 会被创建"同一条件(有 EARTH_AI_KEY 或 EARTH_AI_FAKE),否则不构造 mediaMgr,即便设了
+    // EARTH_AI_FAKE_IMG 也不例外——FAKE_IMG 只是"生图/生视频这一步跳过网络",离线 E2E 时
+    // 仍需搭配 EARTH_AI_FAKE 脚本才能把 generate_photo/generate_video 工具调用触发起来。
     const char* aiKeyForMedia = getenv("EARTH_AI_KEY");
-    const char* fakeImgEnv = getenv("EARTH_AI_FAKE_IMG");
+    const char* aiFakeForMedia = getenv("EARTH_AI_FAKE");
     earthai::MediaManager* mediaMgr = nullptr;
-    if ((aiKeyForMedia && *aiKeyForMedia) || (fakeImgEnv && *fakeImgEnv))
+    if ((aiKeyForMedia && *aiKeyForMedia) || (aiFakeForMedia && *aiFakeForMedia))
     {
         mediaMgr = new earthai::MediaManager(&viewer, ui ? ui->cards() : nullptr,
             (aiKeyForMedia && *aiKeyForMedia) ? std::string(aiKeyForMedia) : std::string());
     }
-    if (outMedia) *outMedia = mediaMgr;
+    runtime.media = mediaMgr;
 
     {
         earthai::Tool fly; fly.name = "fly_to";
@@ -311,5 +320,6 @@ earthai::AIChatCore* configureAIChat(osgViewer::Viewer& viewer,
         viewer.addEventHandler(new AIFrameHandler(aiCore, mediaMgr,
             (autoSubmit && *autoSubmit) ? autoSubmit : "", delayFrames));
     }
-    return aiCore;
+    runtime.core = aiCore;
+    return runtime;
 }

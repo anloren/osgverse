@@ -4,9 +4,11 @@
 // 结果推到右上角卡片(AICardPanel)。Job 驱动,主线程每帧 update() 轮询;耗时的
 // HTTP 调用放独立 worker 线程,绝不阻塞渲染主线程(与 AIChatCore 的 worker 模式一致)。
 #include "ai_tools.h"
+#include <osg/Vec3d>
 #include <osgViewer/Viewer>
 #include <osgViewer/ViewerEventHandlers>
 #include <picojson.h>
+#include <ios>
 #include <string>
 #include <thread>
 
@@ -23,12 +25,20 @@ namespace earthai
     {
     public:
         explicit SnapshotGrabber(osgViewer::Viewer* viewer);
-        void grab(const std::string& pngPath);        // 触发一次抓帧(覆盖写)
-        bool ready(const std::string& pngPath) const;  // 文件存在且大小>0(见 .cpp 稳定性说明)
+        void grab(const std::string& pngPath);   // 触发一次抓帧(覆盖写);同时重置跨帧稳定性状态
+
+        // 真正的跨帧稳定性判断:调用方(MediaManager::update())每帧调一次 ready()。
+        // 本次看到的文件大小与"上一次调用 ready() 时"记录的大小相比——只有连续两次不同的
+        // update() tick 都测到同一个 >0 大小,才认为写盘已完成。单次调用内部不再做"读两次
+        // 比较"那种伪稳定性判断(两次 stat 间隔太短,几乎总能读到同一个值,写到一半也会
+        // 误判为稳定)。_lastSize 在 grab() 时清零,避免复用上一次抓帧遗留的大小造成
+        // 首次 ready() 就误判稳定。
+        bool ready(const std::string& pngPath);
 
     private:
         osgViewer::Viewer* _viewer;
         osg::ref_ptr<osgViewer::ScreenCaptureHandler> _capturer;  // 唯一实例,构造时创建并挂一次
+        std::streamsize _lastSize;   // 上一次 ready() 调用时测到的文件大小,0=尚未测到/已重置
     };
 
     // Gemini 图像生成 Provider:输入渲染帧 PNG 字节 + 提示词,同步阻塞调用(供 worker 线程用)。

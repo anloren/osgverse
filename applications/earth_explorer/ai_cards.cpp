@@ -76,6 +76,12 @@ void AICardPanel::draw()
     {
         AICard& c = _cards[i];
 
+        // 已被标记关闭(如 removeJob() 在 JOB→PHOTO 替换时先摘掉旧 JOB 卡)的卡片本帧
+        // 直接跳过、不占布局位置——否则会在"标记关闭"与"本函数末尾 erase 清理"之间
+        // 出现一帧"关闭中"的鬼影(仍占一格位置,但内容是"任务信息不可用"之类的占位文案)。
+        // 放在循环最前面判断,不进入下面的换列/绘制逻辑,直接推进到下一张卡。
+        if (!c.open) { ++i; continue; }
+
         // 溢出换列:用已知(上一帧)或估计的卡高预判,这一列放不下就向左开新列。
         // curY > kNextColTopY 防御:若单卡本身比可用高度还高,仍要在列顶画出来(裁切总好过死循环)。
         float predictH = (c.lastHeight > 0.0f) ? c.lastHeight : kEstimateHeight;

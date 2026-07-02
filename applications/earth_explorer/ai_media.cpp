@@ -44,7 +44,7 @@ namespace earthai
 
     // ---------------- SnapshotGrabber ----------------
 
-    SnapshotGrabber::SnapshotGrabber(osgViewer::Viewer* viewer) : _viewer(viewer)
+    SnapshotGrabber::SnapshotGrabber(osgViewer::Viewer* viewer) : _viewer(viewer), _lastSize(0)
     {
         // 唯一一个 ScreenCaptureHandler,构造时创建并 addEventHandler 一次;grab() 只更新
         // 它内部 WriteToFile 的捕获目标(setCaptureOperation),不再重复 addEventHandler ——
@@ -81,10 +81,11 @@ namespace earthai
         _capturer->setCaptureOperation(writer.get());
         _capturer->setFramesToCapture(1);
         _capturer->captureNextFrame(*_viewer);
+        _lastSize = 0;   // 新一轮抓帧:清掉上一轮遗留的大小记录,避免 ready() 首次调用就误判稳定
         OSG_NOTICE << "[AIChat] snapshot grab -> " << pngPath << std::endl;
     }
 
-    bool SnapshotGrabber::ready(const std::string& pngPath) const
+    bool SnapshotGrabber::ready(const std::string& pngPath)
     {
         // WriteToFile 用 "_0" 后缀(单 GraphicsContext、OVERWRITE 策略)拼实际文件名,
         // 与 grab() 里去掉 ".png" 再拼前缀的逻辑对应。
@@ -94,20 +95,21 @@ namespace earthai
             prefix.resize(prefix.size() - ext.size());
         std::string actual = prefix + "_0.png";
 
-        // 写盘是渲染线程在捕获回调里做的,文件可能"存在但还没写完"——用两次 stat 之间
-        // 文件大小是否稳定来判断真正写完(简单但足够:两次查询间隔由调用方的轮询节奏决定,
-        // 通常是相邻两帧,写盘早已在这之前完成,稳定性判断只是防御极端慢速磁盘)。
-        if (!osgDB::fileExists(actual)) return false;
+        // 写盘是渲染线程在捕获回调里做的,文件可能"存在但还没写完"——真正的跨帧稳定性:
+        // 本次测到的大小要与"上一次 ready() 调用"记录的大小相同才算稳定,而不是同一次调用
+        // 内部读两次(那样两次 stat 间隔仅几微秒,写到一半也几乎总能读到同一个字节数,
+        // 起不到防御作用)。调用方(MediaManager::update())每帧调一次 ready(),两次真实的
+        // update() tick 之间隔了一整帧的时间,足够覆盖磁盘写入延迟。
+        if (!osgDB::fileExists(actual)) { _lastSize = 0; return false; }
         std::ifstream ifs(actual.c_str(), std::ios::binary | std::ios::ate);
-        if (!ifs.is_open()) return false;
-        std::streamsize sz1 = ifs.tellg();
+        if (!ifs.is_open()) { _lastSize = 0; return false; }
+        std::streamsize sz = ifs.tellg();
         ifs.close();
-        if (sz1 <= 0) return false;
+        if (sz <= 0) { _lastSize = 0; return false; }
 
-        std::ifstream ifs2(actual.c_str(), std::ios::binary | std::ios::ate);
-        if (!ifs2.is_open()) return false;
-        std::streamsize sz2 = ifs2.tellg();
-        return sz1 == sz2 && sz2 > 0;
+        bool stable = (sz == _lastSize);
+        _lastSize = sz;
+        return stable;
     }
 
     // ---------------- GeminiMediaProvider ----------------

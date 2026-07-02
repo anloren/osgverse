@@ -633,9 +633,12 @@ int main(int argc, char** argv)
     // AIChatUI 先于 configureAIChat 创建：show_chart 工具的 execute 需要拿到它的指针
     // 才能把图表 spec 推进右上角卡片队列（同一个实例后面又挂到 ctrlUI->_aiUI 供 draw() 用）。
     AIChatUI* aiUI = new AIChatUI;
-    earthai::MediaManager* aiMedia = nullptr;
-    earthai::AIChatCore* aiCore = configureAIChat(
-        viewer, earthManipulator.get(), &layerMgr, quakeLayer, flightLayer, aiUI, &aiMedia);
+    AIChatDeps aiDeps;
+    aiDeps.viewer = &viewer; aiDeps.mani = earthManipulator.get(); aiDeps.layers = &layerMgr;
+    aiDeps.quakes = quakeLayer; aiDeps.flights = flightLayer; aiDeps.ui = aiUI;
+    AIChatRuntime aiRuntime = configureAIChat(aiDeps);
+    earthai::AIChatCore* aiCore = aiRuntime.core;
+    earthai::MediaManager* aiMedia = aiRuntime.media;
 
     // ImGui 控制面板 — 挂到最终 HUD 相机（cameras[3]），确保在地球图像之上绘制
     osg::ref_ptr<osgVerse::ImGuiManager> imgui = new osgVerse::ImGuiManager;

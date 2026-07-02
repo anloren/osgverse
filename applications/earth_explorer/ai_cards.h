@@ -26,8 +26,9 @@ struct AICard
     float lastHeight = 0.0f;
     // 卡片的稳定身份,用于拼 ImGui 窗口 ID(见 AICardPanel::draw 注释)。
     // 不能用 vector 下标:关掉第 i 张卡后,后面的卡下标会左移,ImGui 按 ID 认窗口,
-    // 下标变了就被当成一个新窗口打开——出现一帧闪烁/位置错乱。serial 只在 pushChart
-    // 时递增分配,卡片存活期间不变,关闭旧卡不影响其余卡的 serial。
+    // 下标变了就被当成一个新窗口打开——出现一帧闪烁/位置错乱。serial 现由 pushChart/
+    // pushPhoto/pushJob 三处统一从 _nextSerial 递增分配(每种卡片各自的 push 方法都会
+    // 分配一个),卡片存活期间不变,关闭旧卡不影响其余卡的 serial。
     int serial = 0;
 };
 

@@ -541,6 +541,7 @@ generateImage 请求体:`contents.parts = [{text: prompt}, {inline_data:{mime_ty
 - [ ] **Step 3: 实现 GeminiMediaProvider + generate_photo Job 流 + 📷/卡片接线**(编译过;E2E fixture `ai_fake_photo.json` 走 FakeProvider 触发 generate_photo,但真生图需 key——fixture 模式下 MediaProvider 用 `EARTH_AI_FAKE_IMG=<png>` 直接拷贝该文件当"生成结果",全链路离线可测:断言日志 `[AIChat] photo job done -> <path>` 且文件存在)
 - [ ] **Step 4: 真机 key 冒烟**(用户 key,一张维港照片,验收图质)
 - [ ] **Step 5: Commit** `feat(earth-ai): view snapshot pipeline + generate_photo with job cards`
+- ai_fake_photo2.json:手动二次提交验证 already-running 拒绝路径(自动化单次 AUTOSUBMIT 消费不到)
 
 ---
 
