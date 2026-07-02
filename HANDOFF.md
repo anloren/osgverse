@@ -10,8 +10,9 @@
 
 - **f2 正式图层**:`tiles3d_data.{h,cpp}` 重构为 `Tiles3DLayer` 控制器(仿 QuakeLayer);默认源=f2(免 key,实测),**懒加载**(勾选才后台线程拉根 tileset → update 回调主线程挂树;NodeMask 开关,关=零流量)。UI 新组「三维城市 / 3D City」+ 署名小字(OverlayLayer 新增通用 subtitle 字段)。`EARTH_3DTILES`:`1`=默认源随启动开 / `<url>`=换源 / `0`=关 / 未设=UI 控制。
 - **EARTH_BASEMAP 钩子**:`google`(默认)/`esri`/自定义模板,createCustomPath ORTHOPHOTO 分支,预热同源。
-- **"地面扭曲"最终定性(修正版,两层)**:主因=**f2 自身粗 LOD 网格**(ContextCapture 粗层融化观感,细化跟上即清晰,渐进流式中间态非 bug);次因=Google/Esri 香港正射掺倾斜航拍(楼烘焙进地面,两家都有)。
-- **验证**:f2 尖沙咀街道级细化 ✓、默认零流量 ✓、全球远景+极点回归 ✓、Esri 切源 ✓。真机交互验证待用户。
+- **"地面扭曲"真根因(用户指认"扭曲层更亮≠建筑"后三度修正,最终版)**:**Terrarium 高程是含楼高的 DSM**(尖沙咀 z15 瓦片 p90≈37m/最高 78m,真实地面 3-8m)× `TileElevationScale=2.0` → 城区 80-120m 假土包,亮色底图绷上面拉扯变形,与 f2(真实高度、偏暗着色)错位。**也是更早会话"地图扭曲"悬案的真根因。**次要因素:Google/Esri 正射掺倾斜航拍(楼烘焙进地面)。
+- **修复(`e66e4f96`)**:九龙+港岛北岸平原 bbox 内 z>=12 高程返回空路径(平坦几何),假土包消失,太平山/狮子山在 bbox 外保留;`EARTH_HK_FLATDEM=0` 可关。效果图=f2 建筑站平整地面、维港干净、背景群山自然。不动共享插件。
+- **验证**:f2 尖沙咀街道级细化 ✓、默认零流量 ✓、全球远景+极点回归 ✓、Esri 切源 ✓、flatdem 三连跑稳定 ✓(一次 teardown SIGBUS 偶发,复现 0/3,不阻塞)。真机交互验证待用户。
 - 未闭环小事项(不阻塞)见 plan 文档:粗 LOD 观感无 SSE 调节钩子、EARTH_TILT 时序、dist 未重打包。
 
 ---
