@@ -125,6 +125,8 @@ IF(NOT VERSE_USE_EXTERNAL_GLES)
     ENDIF(VERSE_SUPPORT_CPP17)
 ENDIF(NOT VERSE_USE_EXTERNAL_GLES)
 
+NEW_TEST(osgVerse_Test_Ai_Chat ai_chat_tests.cpp)  # AI Chat tool registry / job manager unit tests
+
 IF(VERSE_BUILD_DEPRECATED_TESTS)
     IF(NOT VERSE_USE_EXTERNAL_GLES)
         NEW_TEST(osgVerse_Test_FastRtt deprecated/fast_rtt_test.cpp)
