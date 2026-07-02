@@ -137,6 +137,8 @@ public:
         supportsOption("User", "TMS server URL with wildcards or .mbtiles, applied as extra overlay layer");
         supportsOption("Overlay", "TMS/WMTS server URL with wildcards, applied as second overlay layer (e.g. GIBS)");
         supportsOption("UrlPathFunction", "The custom function from setPluginData() to compute tile URL");
+        supportsOption("ElevationFilterFunction", "Optional setPluginData() hook filtering decoded "
+                       "Terrarium heights per tile (regional elevation correction)");
         supportsOption("UseEarth3D", "Display TMS tiles as a real earth: default=0");
         supportsOption("UseWebMercator", "Use Web Mercator (Level-0 has 4 tiles): default=0");
         supportsOption("OriginBottomLeft", "Use bottom-left as every tile's origin point: default=0");
@@ -264,6 +266,8 @@ protected:
         tileCB->setBottomLeft(atoi(botLeft.c_str()) > 0);
         tileCB->setUseWebMercator(useWM); tileCB->setFlatten(flatten);
         tileCB->setCreatePathFunction(pathFunc); tileCB->setName(name + "_Callback");
+        tileCB->setElevationFilterFunction((osgVerse::TileCallback::ElevationFilterFunc)
+                                           opt->getPluginData("ElevationFilterFunction"));
         if (opt)
         {
             std::string skirt = opt->getPluginStringData("TileSkirtRatio");

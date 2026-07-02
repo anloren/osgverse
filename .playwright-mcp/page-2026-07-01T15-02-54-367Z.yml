@@ -1,0 +1,86 @@
+- generic [ref=e1]:
+  - region:
+    - heading "3d application" [level=1]
+  - main [ref=e2]:
+    - main [ref=e5]:
+      - generic [ref=e6]:
+        - generic:
+          - generic:
+            - generic: Open3Dhk
+            - generic: 3D Digital Map 3D Digital Map
+        - generic [ref=e19]: © 2026 Lands Department
+        - generic:
+          - list:
+            - listitem:  
+            - listitem
+        - text:  +       
+      - generic [ref=e27]:
+        - button [ref=e28] [cursor=pointer]:
+          - img [ref=e30]: menu
+        - separator [ref=e31]
+        - navigation [ref=e32]:
+          - button "logo" [ref=e33] [cursor=pointer]:
+            - generic [ref=e34]:
+              - img [ref=e35]
+              - img "logo" [ref=e36]:
+                - img [ref=e39]
+        - separator [ref=e40]
+        - button [ref=e41] [cursor=pointer]:
+          - img [ref=e43]: apps
+        - separator [ref=e44]
+        - button [ref=e45] [cursor=pointer]:
+          - img [ref=e47]: 󰘥
+        - separator [ref=e48]
+        - button "Eng" [ref=e49] [cursor=pointer]:
+          - generic [ref=e50]: Eng
+        - separator [ref=e51]
+        - button "繁" [ref=e52] [cursor=pointer]:
+          - generic [ref=e53]: 繁
+        - separator [ref=e54]
+        - button "简" [ref=e55] [cursor=pointer]:
+          - generic [ref=e56]: 简
+      - generic [ref=e60]:
+        - generic [ref=e61]:
+          - button [ref=e62] [cursor=pointer]:
+            - img [ref=e63]: 
+          - separator [ref=e64]
+        - combobox [expanded] [active] [ref=e67]:
+          - listbox
+        - button [ref=e69] [cursor=pointer]:
+          - img [ref=e71]: search
+      - list
+      - list [ref=e72]:
+        - listitem
+        - listitem: 
+        - listitem
+        - listitem
+        - listitem [ref=e73]:
+          - button "home" [ref=e74] [cursor=pointer]:
+            - img [ref=e76]:
+              - img [ref=e77]
+        - listitem [ref=e78]:
+          - button [ref=e79] [cursor=pointer]:
+            - img [ref=e82]
+        - listitem [ref=e83]:
+          - list [ref=e84]:
+            - listitem [ref=e85]:
+              - button "zoom in" [ref=e86] [cursor=pointer]:
+                - img [ref=e88]: add
+            - listitem [ref=e89]:
+              - button "zoom out" [ref=e90] [cursor=pointer]:
+                - img [ref=e92]: remove
+        - listitem [ref=e93]:
+          - button [ref=e94] [cursor=pointer]:
+            - img [ref=e96]: share
+        - listitem [ref=e97]:
+          - button [ref=e98] [cursor=pointer]:
+            - img [ref=e100]: straighten
+        - listitem
+        - listitem
+        - listitem
+        - listitem
+        - listitem
+        - listitem
+  - generic:
+    - generic:
+      - generic: 

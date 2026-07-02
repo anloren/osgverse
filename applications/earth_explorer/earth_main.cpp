@@ -4,7 +4,6 @@
 #include <osg/Texture2D>
 #include <osg/MatrixTransform>
 #include <osgDB/Archive>
-#include <osgDB/FileUtils>
 #include <osgDB/ReadFile>
 #include <osgDB/WriteFile>
 #include <osgGA/StateSetManipulator>
@@ -197,8 +196,63 @@ protected:
 static const std::string kTerrariumUrl =
     "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
 
-// 香港"羽化压平"本地高程瓦片目录(main 按 mainFolder 设置;见 ELEVATION 分支注释)
-static std::string gHkDemFolder;
+// —— 香港高程运行时过滤(经 ElevationFilterFunction 注入 osgdb_tms)——
+// 两个问题一并修:① Terrarium(SRTM 派生)是含楼高的表面模型,高楼区把楼高掺进地形
+// (实测尖沙咀 p90≈37m,真实地面 3-8m);② 引擎统一 ×TileElevationScale(2.0) 夸张 →
+// 香港地表处处高于实景三维网格(真实高度),底图贴图"污染"进 3D 城区(盖住网格地面)。
+// 处方(全层级同一个连续函数 → 父子 LOD 与邻接由构造保证一致,不会再出"漏空壳"):
+//   城区平原核心(九龙+港岛北岸):高度=0(海平面,低于网格地面 3-5m → 被网格盖住);
+//   都会区(含太平山/狮子山/港岛南等):高度=原始×0.5-2m(抵消 ×2 夸张≈真实高度、略沉,
+//   山形保留,网格贴着山面);区外:原始值。两条边界各带 ~1-2km smoothstep 渐变。
+// f2 关闭时城区地面平整、山体回归真实高度,同样比"假土包"更对。EARTH_HK_FLATDEM=0 关闭。
+static void hkElevationFilter(float* hts, int w, int h, int x, int y, int z)
+{
+    static const bool enabled = []() {
+        const char* e = getenv("EARTH_HK_FLATDEM");
+        return !(e && *e && atoi(e) == 0);
+    }();
+    if (!enabled || !hts || w <= 0 || h <= 0) return;
+
+    // z>15 时图像内容是 z15 祖先瓦片(见 createCustomPath 同规则),按祖先坐标换算范围
+    int tz = z, tx = x, tyTMS = y;
+    if (z > 15) { int dz = z - 15; tx = x >> dz; tyTMS = y >> dz; tz = 15; }
+    double n = (double)(1 << tz);
+    int tyXYZ = (int)n - 1 - tyTMS;
+    double lonMin = tx / n * 360.0 - 180.0, lonSpan = 360.0 / n;
+    double latN = atan(sinh(osg::PI * (1.0 - 2.0 * tyXYZ / n))) * 180.0 / osg::PI;
+    double latS = atan(sinh(osg::PI * (1.0 - 2.0 * (tyXYZ + 1) / n))) * 180.0 / osg::PI;
+    // 快速剔除:与都会外包络(含渐变带)不相交的瓦片原样返回(全球其它地区零改动)
+    if (lonMin > 114.37 || lonMin + lonSpan < 113.88 || latS > 22.44 || latN < 22.17) return;
+
+    auto smooth01 = [](double t) {
+        t = t < 0.0 ? 0.0 : (t > 1.0 ? 1.0 : t); return t * t * (3.0 - 2.0 * t);
+    };
+    // 到矩形 [la0,la1]x[lo0,lo1] 的外距离经 f 宽渐变:核心=0 → 带外=1
+    auto outerW = [&smooth01](double lat, double lon, double la0, double la1,
+                              double lo0, double lo1, double f) {
+        double dla = std::max(std::max(la0 - lat, lat - la1), 0.0);
+        double dlo = std::max(std::max(lo0 - lon, lon - lo1), 0.0);
+        return smooth01(sqrt(dla * dla + dlo * dlo) / f);
+    };
+
+    for (int row = 0; row < h; ++row)
+    {
+        // 解码图自底向上(row 0=南);行中心对应的 XYZ 行分数 → 墨卡托纬度
+        double yf = (double)tyXYZ + 1.0 - ((double)row + 0.5) / (double)h;
+        double lat = atan(sinh(osg::PI * (1.0 - 2.0 * yf / n))) * 180.0 / osg::PI;
+        for (int col = 0; col < w; ++col)
+        {
+            double lon = lonMin + ((double)col + 0.5) / (double)w * lonSpan;
+            double wMetro = outerW(lat, lon, 22.19, 22.42, 113.90, 114.35, 0.02);
+            if (wMetro >= 1.0) continue;
+            double wFlat = outerW(lat, lon, 22.276, 22.335, 114.115, 114.225, 0.012);
+            float& hv = hts[row * w + col];
+            double hMetro = (double)hv * 0.5 - 2.0;   // 抵消 ×2 夸张,整体略沉
+            double hIn = wFlat * hMetro;              // 平原核心=0,向山地平滑过渡
+            hv = (float)(wMetro * (double)hv + (1.0 - wMetro) * hIn);
+        }
+    }
+}
 
 static std::string createCustomPath(int type, const std::string& prefix, int x, int y, int z)
 {
@@ -226,43 +280,8 @@ static std::string createCustomPath(int type, const std::string& prefix, int x, 
     }
     else if (type == osgVerse::TileCallback::ELEVATION)
     {
-        // 香港城区平原去伪:Terrarium(SRTM 派生)是含楼高的表面模型(DSM),高楼区把楼高掺进
-        // 地形(实测尖沙咀瓦片 p90≈37m、最高 78m,真实地面仅 3-8m),再乘 TileElevationScale=2
-        // → 亮色底图被绷在 ~80-120m 的假土包上,与实景三维层(真实高度)严重错位、拉扯变形。
-        // 修法:优先使用预生成的"羽化压平"本地瓦片(gen_hk_flat_dem.py 产出,核心区压平到
-        // ≤6m、向外 ~1.2km 平滑过渡到原始高程;z8-15 全层级同一函数处理 → 父子 LOD 与 bbox
-        // 内外邻接由构造保证一致,无落差/漏空壳)。z>15 走下方 z15 祖先分支时同样命中本地
-        // z15 瓦片,烘焙机制不变。EARTH_HK_FLATDEM=0 可关闭(恢复原始 DEM,对比用)。
-        {
-            static const bool flatHK = []() {
-                const char* e = getenv("EARTH_HK_FLATDEM");
-                return !(e && *e && atoi(e) == 0);
-            }();
-            if (flatHK && !gHkDemFolder.empty())
-            {
-                int lx = x, lyXYZ = yXYZ, lz = z;
-                if (z > 15)   // 与下方 z>15 祖先规则同款坐标,保证烘焙采样一致
-                {
-                    int dz = z - 15;
-                    lx = x >> dz; lyXYZ = (1 << 15) - 1 - (y >> dz); lz = 15;
-                }
-                if (lz >= 8)
-                {
-                    // 粗判 bbox(含羽化带)再查文件,避免全球瓦片都 stat 一次
-                    double n = (double)(1 << lz);
-                    double lonMin = (double)lx / n * 360.0 - 180.0;
-                    double lonMax = (double)(lx + 1) / n * 360.0 - 180.0;
-                    double latMax = atan(sinh(osg::PI * (1.0 - 2.0 * (double)lyXYZ / n))) * 180.0 / osg::PI;
-                    double latMin = atan(sinh(osg::PI * (1.0 - 2.0 * (double)(lyXYZ + 1) / n))) * 180.0 / osg::PI;
-                    if (lonMax > 114.10 && lonMin < 114.24 && latMax > 22.26 && latMin < 22.35)
-                    {
-                        std::string local = gHkDemFolder + "/" + std::to_string(lz) + "/"
-                                          + std::to_string(lx) + "/" + std::to_string(lyXYZ) + ".png";
-                        if (osgDB::fileExists(local)) return local;
-                    }
-                }
-            }
-        }
+        // (香港城区 DSM 假土包/×2 夸张的修正不在这里做路径分流,而是经 ElevationFilterFunction
+        //  钩子在解码后逐像素过滤——见上方 hkElevationFilter 注释。)
         // AWS Terrarium 高程最高约 z15。深瓦片(z>15)取 z15 **祖先瓦片**,createTile 用 elevScaleBias
         // 采子区一步烘焙正确高度 → 与 z15 父级连续、消除 LOD 边界落差/看穿孔洞;配套 EarthManipulator
         // 的相机地形地板(Step A)防穿模。一步烘焙按瓦片坐标确定性算出,无运行时继承的时序竞态。
@@ -368,7 +387,6 @@ int main(int argc, char** argv)
     osgDB::Registry::instance()->addFileExtensionAlias("tif", "verse_tiff");
 
     std::string mainFolder = BASE_DIR + "/models"; arguments.read("--folder", mainFolder);
-    gHkDemFolder = mainFolder + "/Earth/hk_dem";   // 在建地球/预热之前设好(两者都走 createCustomPath)
     std::string skirtRatio = "0.05"; arguments.read("--skirt", skirtRatio);
     int w = 1920, h = 1080; arguments.read("--resolution", w, h);
     bool cityWaitingTiles = true, manipulatorCanThrow = false;
@@ -391,6 +409,7 @@ int main(int argc, char** argv)
         " TileElevationScale=2.0 TileSkirtRatio=" + skirtRatio;
     osg::ref_ptr<osgDB::Options> earthOptions = new osgDB::Options(earthURLs);
     earthOptions->setPluginData("UrlPathFunction", (void*)createCustomPath);
+    earthOptions->setPluginData("ElevationFilterFunction", (void*)hkElevationFilter);
 
     osg::ref_ptr<osg::Node> earth = osgDB::readNodeFile("0-0-0.verse_tms", earthOptions.get());
     if (!earth) { OSG_FATAL << "Main earth scene is missing!\n"; return 1; }

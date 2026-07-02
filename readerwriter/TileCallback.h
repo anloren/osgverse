@@ -32,7 +32,7 @@ namespace osgVerse
         TileCallback(bool g = true)
         :   _x(-1), _y(-1), _z(-1), _skirtRatio(0.02f), _elevationScale(1.0f), _withGlobeAttr(g), _flatten(true),
             _bottomLeft(false), _useWebMercator(false), _layersDone(false), _elevationEncoding(RAW_ELEVATION)
-        { _createPathFunc = NULL; }
+        { _createPathFunc = NULL; _elevationFilterFunc = NULL; }
         virtual void operator()(osg::Node* node, osg::NodeVisitor* nv);
 
         virtual osg::Vec3d convertToECEF(const osg::Vec3d& lla) const;
@@ -89,6 +89,15 @@ namespace osgVerse
         void setCreatePathFunction(CreatePathFunc f) { _createPathFunc = f; }
         CreatePathFunc getCreatePathFunction() const { return _createPathFunc; }
 
+        // 可选:Terrarium 高程解码后的逐像素过滤钩子(应用注入,如区域性高程修正)。参数:
+        // float 高度数组(米,行序同 decodeTerrarium 输出=自底向上/南在 row 0)、宽、高、
+        // 瓦片 x/y/z(与 UrlPathFunction 相同约定,y 为 TMS 行号)。注意:若应用的路径函数
+        // 对深瓦片返回祖先瓦片(如 EarthExplorer z>15→z15),传入的仍是深瓦片坐标而图像
+        // 内容是祖先瓦片,过滤函数需按同一规则自行换算。默认 NULL = 不过滤,零影响。
+        typedef void (*ElevationFilterFunc)(float* heights, int w, int h, int x, int y, int z);
+        void setElevationFilterFunction(ElevationFilterFunc f) { _elevationFilterFunc = f; }
+        ElevationFilterFunc getElevationFilterFunction() const { return _elevationFilterFunc; }
+
         void setElevationEncoding(ElevationEncoding e) { _elevationEncoding = e; }
         ElevationEncoding getElevationEncoding() const { return _elevationEncoding; }
 
@@ -141,6 +150,7 @@ namespace osgVerse
         osg::Matrix _worldToLocal;
         osg::Vec3d _extentMin, _extentMax;
         CreatePathFunc _createPathFunc;
+        ElevationFilterFunc _elevationFilterFunc;
         ElevationEncoding _elevationEncoding;
         int _x, _y, _z; float _skirtRatio, _elevationScale;
         bool _withGlobeAttr, _flatten, _bottomLeft, _useWebMercator, _layersDone;

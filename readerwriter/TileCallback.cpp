@@ -135,6 +135,9 @@ osg::Texture* TileCallback::createLayerImage(LayerType id, bool& emptyPath, cons
         {
             osg::ref_ptr<osg::Image> decoded = TileCallback::decodeTerrarium(image.get());
             if (decoded.valid()) image = decoded;
+            // 应用注入的逐像素高程过滤(区域性修正;默认 NULL 不过滤)
+            if (_elevationFilterFunc && image.valid() && image->getDataType() == GL_FLOAT)
+                _elevationFilterFunc((float*)image->data(), image->s(), image->t(), _x, _y, _z);
         }
         tex2D->setImage(image.get());
     }
