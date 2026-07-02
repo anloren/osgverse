@@ -187,7 +187,12 @@ void AIChatUI::draw(earthai::AIChatCore* core)
 // 锚定/风格与 EarthControlUI.h 里既有的「地震详情」「航班详情」卡保持一致：
 // 固定 x = DisplaySize.x - 20，ImGuiCond_Always，锚点 (1,0)；两张既有卡分别在
 // y=20 与 y=160（140px 一档，经验值，够放各卡内容不重叠）。AI 卡是新的一列，
-// 从 y=300（地震+航班两档之后再留一档）开始向下堆叠，每卡实际高度用于摆下一张卡。
+// 最右列从 y=300（地震+航班两档之后再留一档）开始向下堆叠，每卡实际高度用于摆下一张卡。
+// 溢出换列:多张卡总高可能超过屏幕(1280x800 逻辑分辨率下三张卡 ≈554px,起点 300 就
+// 到底裁切并压住聊天条),放卡前先用上一帧缓存的高度(首帧未知用估计值)判断会不会
+// 越过底部保留区,越过就向左开新列。地震/航班详情卡只占最右列,所以向左的新列可以
+// 从 y=20 顶部开始,不会压到它们。极端很多卡时列数不设上限、一直向左铺
+// (实际场景卡片就个位数,不做更多处理)。
 void AIChatUI::drawCards()
 {
     if (_cards.empty()) return;
@@ -195,13 +200,27 @@ void AIChatUI::drawCards()
     const float kRightMargin = 20.0f;
     const float kCardWidth = 340.0f;
     const float kCardGap = 12.0f;
-    float y = 300.0f;   // 地震卡(20)+航班卡(160,约140高)之下留出的起始位
+    const float kFirstColTopY = 300.0f;    // 最右列起始 y:地震卡(20)+航班卡(160,约140高)之下
+    const float kNextColTopY = 20.0f;      // 向左新列起始 y:该列没有详情卡,可从顶部开始
+    const float kBottomReserve = 160.0f;   // 底部保留区:给底部居中的 AI 聊天条留空(收起态高度+边距)
+    const float kEstimateHeight = 200.0f;  // 首帧 lastHeight 未知时用于换列判断的估计卡高
+    float curX = io.DisplaySize.x - kRightMargin;   // 当前列右边界(配合 (1,0) 锚点)
+    float curY = kFirstColTopY;
 
     for (size_t i = 0; i < _cards.size(); )
     {
         AICard& c = _cards[i];
-        ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - kRightMargin, y),
-                                ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+
+        // 溢出换列:用已知(上一帧)或估计的卡高预判,这一列放不下就向左开新列。
+        // curY > kNextColTopY 防御:若单卡本身比可用高度还高,仍要在列顶画出来(裁切总好过死循环)。
+        float predictH = (c.lastHeight > 0.0f) ? c.lastHeight : kEstimateHeight;
+        if (curY + predictH > io.DisplaySize.y - kBottomReserve && curY > kNextColTopY)
+        {
+            curX -= kCardWidth + kCardGap;
+            curY = kNextColTopY;
+        }
+
+        ImGui::SetNextWindowPos(ImVec2(curX, curY), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
         ImGui::SetNextWindowSize(ImVec2(kCardWidth, 0.0f), ImGuiCond_Always);
 
         std::string title = u8"图表 Chart";
@@ -229,7 +248,7 @@ void AIChatUI::drawCards()
 
         c.open = open;
         c.lastHeight = cardH;
-        y += cardH + kCardGap;
+        curY += cardH + kCardGap;
         ++i;
     }
 

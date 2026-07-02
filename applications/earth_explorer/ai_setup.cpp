@@ -226,6 +226,9 @@ earthai::AIChatCore* configureAIChat(osgViewer::Viewer& viewer,
     const char* aiFake = getenv("EARTH_AI_FAKE");
     if (aiFake && *aiFake)
     {
+        // 注意:app 启动早期会把 cwd 切到可执行文件目录(见启动日志 "Working directory"),
+        // EARTH_AI_FAKE 用相对路径会相对该目录解析而非命令行所在目录——fixture 建议一律
+        // 传绝对路径。loadFromFile 失败时下面的 OSG_WARN 把传入路径原样打出来,便于排查。
         earthai::FakeProvider* fp = new earthai::FakeProvider;
         if (!fp->loadFromFile(aiFake)) OSG_WARN << "[AIChat] bad fake script: " << aiFake << std::endl;
         aiCore = new earthai::AIChatCore(fp, aiRegistry);
