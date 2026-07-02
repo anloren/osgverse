@@ -40,10 +40,13 @@ static const char* tilesFragCode = {
     "#endif\n"
     "void main() {\n"
     "    vec4 baseColor = VERSE_TEX2D(DiffuseMap, texCoord.st); \n"
-    // 简单半兰伯特光照(固定顶光),让立面有体积感;不接大气,自成一体。
+    // f2 的 glb 声明了 KHR_materials_unlit:摄影测量纹理自带烘焙光照,再打光就是双重
+    // 着色——曾用半兰伯特(0.55-1.0)把网格整体压暗,和明亮底图对比强烈,任何未覆盖/
+    // 未细化区域都成了亮补丁(斑驳感放大)。改为按数据本意 unlit 直出,仅留极轻的顶光
+    // 起伏(0.92-1.0)保住立面体积感,同时亮度与底图基本一致。
     "    vec3 N = normalize(normalInWorld); \n"
     "    float ndl = max(dot(N, vec3(0.0, 0.0, 1.0)), 0.0); \n"
-    "    float diffuse = 0.55 + 0.45 * ndl; \n"
+    "    float diffuse = 0.92 + 0.08 * ndl; \n"
     "    vec4 finalColor = vec4(baseColor.rgb * diffuse, baseColor.a); \n"
     "#ifdef VERSE_GLES3\n"
     "    fragColor = finalColor; \n"
@@ -103,15 +106,23 @@ public:
                 OSG_INFO << "[Tiles3D] background load begins: " << url << std::endl;
                 osg::ref_ptr<osg::Node> tiles;
                 bool isHttp = (url.rfind("http://", 0) == 0 || url.rfind("https://", 0) == 0);
+                // EARTH_3DTILES_SSE=<阈值> 覆盖 LOD 细化激进度(默认 16;越小越早细化、
+                // 越清晰,减轻"相邻瓦片细化深度不一"的拼布/斑驳感,代价是流量与内存)
+                const char* sseEnv = getenv("EARTH_3DTILES_SSE");
                 if (isHttp)
                 {
                     // 网络 URL:通过 verse_web 读取器获取内容,并以 verse_tiles 解析
                     // (参见 plugins/osgdb_3dtiles/ReaderWriter3dTiles.cpp 约第 49 行注释)
                     osg::ref_ptr<osgDB::Options> opt = new osgDB::Options("Extension=verse_tiles");
+                    if (sseEnv && *sseEnv) opt->setPluginStringData("MaxScreenSpaceError", sseEnv);
                     tiles = osgDB::readNodeFile(url + ".verse_web", opt.get());
                 }
                 else
-                    tiles = osgDB::readNodeFile(url + ".verse_tiles");
+                {
+                    osg::ref_ptr<osgDB::Options> opt = new osgDB::Options;
+                    if (sseEnv && *sseEnv) opt->setPluginStringData("MaxScreenSpaceError", sseEnv);
+                    tiles = osgDB::readNodeFile(url + ".verse_tiles", opt.get());
+                }
 
                 std::lock_guard<std::mutex> guard(self->_mutex);
                 self->_pending = tiles; self->_loadDone = true;

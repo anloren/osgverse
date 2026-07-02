@@ -59,6 +59,8 @@ public:
         supportsExtension("json", "Decription file of 3dtiles");
         supportsExtension("children", "Internal use of 3dtiles' <children> tag");
         supportsOption("UsePixelsOnScreen", "Use pixels-on-screen to switch between LOD children. Default: 0");
+        supportsOption("MaxScreenSpaceError", "Override screen-space-error threshold for LOD refinement "
+                       "(smaller = refine earlier/sharper). Default: 16");
     }
 
     virtual const char* className() const
@@ -270,8 +272,13 @@ protected:
 
         double range = rangeV.is<double>() ? rangeV.get<double>() : 0.0;
         double sseDenominator = 0.5629, height = 1080.0; // FIXME
+        // 可选 Options 覆盖屏幕空间误差阈值(更小=更早细化/更清晰/更吃流量与内存;
+        // 未设置时用成员默认值)。经 cloneOptions 向子 tileset 传播,作用于整棵树。
+        double sse = _maxScreenSpaceError;
+        std::string sseStr = options ? options->getPluginStringData("MaxScreenSpaceError") : "";
+        if (!sseStr.empty() && atof(sseStr.c_str()) > 0.0) sse = atof(sseStr.c_str());
         if (range < 0.0 || range > 99999.0) range = FLT_MAX;  // invalid range
-        range = (range * height) / (_maxScreenSpaceError * sseDenominator);
+        range = (range * height) / (sse * sseDenominator);
 
         bool isAbsoluteBound = false;  // FIXME: how to handle <region>?
         osg::BoundingSphered bs = getBoundingSphere(bound, isAbsoluteBound);
