@@ -4,7 +4,21 @@
 > 用户主语言中文，请用中文回复。macOS / Apple Silicon。
 
 ---
-## ✅ 2026-07-02 会话 — 香港真实 3D Tiles：破碎 bug 已修复 + 纹理"问题"查明是官方预期行为（最新，先读这个）
+## ✅ 2026-07-02 会话(续)— f2 决策已定 + 已 push + f2 实测:数据全免 key 直达,但插件缺"外链 tileset 矩阵继承"(最新,先读这个)
+
+**用户把 f2 调研与否的决定权交给本会话,已按计划执行完毕**:9 个 commit 已 push `origin/master`(HEAD=`1484f3f7`),f2 实测完成,**结论:接入 f2 不是换个 URL 就行,插件有一个明确的缺口要修**。
+
+### f2(3D Visualisation Map API)实测结果 —— 数据侧全绿,渲染侧一个明确缺口
+
+- **完全不需要 key(实测)**:`https://data.map.gov.hk/api/3d-data/3dtiles/f2/tileset.json` 及其下所有子 tileset/b3dm,**不带 key 全部 HTTP 200 直接下载**。官方文档说的 key(同一邮箱 `3dmap@landsd.gov.hk` 免费申请)当前未强制。署名要求与 3dsd 相同。
+- **纹理是真 photorealistic**:抽查叶子 b3dm,嵌入 **KTX2**(Basis)压缩纹理,单瓦片 74KB 真实航拍纹理。**引擎的 KTX2 转码链路实测工作正常**(`LoaderGLTF`→`loadKtx2`→`[LoaderKTX] Transcoded format ... 83f0`=DXT1,一次 headless 跑出数千次成功转码)。
+- **结构(ContextCapture 风味,与 3dsd 不同)**:root tileset(asset 1.1,refine=ADD,box 为绝对 ECEF)→ 17 个外链子 tileset(如 `1/tileset.json`,**root.transform=纯 ECEF 平移**,box 为局部坐标)→ 再外链叶子 tileset(如 `1/Data/temp0/Tile_5_15_L4.json`,**自己没有 transform**,坐标沿用父级局部系)→ b3dm(gltfUpAxis=Y)。
+- **渲染缺口(决定性 A/B 证据)**:headless 指向 f2,同视角(尖沙咀/半山 2km)开/关 `EARTH_3DTILES` 截图逐像素 diff **只差 0.02%**(UI 数字抖动)——**瓦片在流式加载、KTX2 在转码,但网格没画出来**。根因:叶子 tileset 无自身 transform,按 3D Tiles 规范外链 tileset 的 root 要**继承引用方累积的 transform**;`plugins/osgdb_3dtiles` 只应用"本文件 root 自己的 transform",不跨文件传播 → 叶子几何落在局部坐标(离地心 ~40km 的地球内部),永不可见。3dsd/旧 fixture 不受影响是因为它们矩阵都写在各自文件根部。
+- **诊断复现**:`EARTH_3DTILES="https://data.map.gov.hk/api/3d-data/3dtiles/f2/tileset.json"` + headless 配方(见 2026-07-01 plan),日志有 `[Tiles3D] loaded ... radius=42114`(root 包围球正确,因为 root box 是绝对 ECEF)+ 大量 KTX 转码,但画面无建筑。注意 headless 截图需 `dangerouslyDisableSandbox`(沙箱拦应用写 /tmp)。
+- **下一步(待用户点头)**:修 `ReaderWriter3dTiles.cpp` 的 transform 继承(把父级累积矩阵传入外链 tileset 的加载),预计中等工作量;修好后 f2 直接可用,普通楼也有真实纹理,解决 3dsd"大片灰模"的观感问题。3dsd 路线继续可用,不冲突。
+
+---
+## ✅ 2026-07-02 会话 — 香港真实 3D Tiles：破碎 bug 已修复 + 纹理"问题"查明是官方预期行为
 
 **本会话代码工作已全部完成、已提交(8 个 commit,`ed6257c3`..`ecb6e3b2`)、未 push**。真机已用真实 key 验证过。剩一个**用户尚未回答的决策**,新会话开场就该先问。
 
@@ -26,12 +40,9 @@
 - 顺带排查过"地图扭曲"的其他可能原因,均排除:`city_data.cpp` 城市列表不含香港(无图层重叠)、GIBS 云图 404 确认无关且早于本次工作存在、Google 卫星底图深层缩放 404 确实存在但集中在市区以南海域(不在建筑聚集区)。
 - 已核实"API 迁移截止 2026-05-09"的说法是过期缓存信息,当前 API 文档页无此通知,我们用的端点结构和文档一致,无需改动。
 
-### ⚠️ 悬而未决 —— 新会话必须先向用户确认这一点
+### ✅ 悬而未决 → 已解决(2026-07-02 续会话)
 
-上一轮我问用户:**"要不要花时间查'3D Visualisation Map API'是不是能单独申请、纹理更统一的数据源?还是你觉得现在这样可以接受,先把现有修复 push 掉?"** ——用户没有正面回答(回了一句无法理解的"0000.",追问后转向切模型、开新会话)。**这个问题原样还悬着,新会话开场应该直接重新问用户**,而不是替用户决定。
-
-- 若用户选"接受现状,先 push":直接 `git push origin master`(8 个 commit),完成收尾。
-- 若用户选"查 3D Visualisation Map":需要新一轮调研(申请方式、是否需要新 key、`3dtiles/f2` 端点实际结构)+ 判断值不值得为纹理精度重新接入一次。
+用户把决定权交给了续会话,执行结果:**已 push**(9 个 commit 到 `origin/master`)+ **f2 已实测**(见最顶部章节:数据免 key 直达、KTX2 转码正常,但插件缺外链 tileset 的 transform 继承,待用户决定是否修)。
 
 详见 `docs/superpowers/plans/2026-07-01-earth-hk-3dtiles-render-fix.md`(完整排查过程+判定分支)、`docs/superpowers/plans/2026-06-24-earth-hk-3dtiles.md`(累积实现结果)。
 
