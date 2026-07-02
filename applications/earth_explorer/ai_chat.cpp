@@ -3,6 +3,7 @@
 // 设计要点:worker 线程只读 provider->chat() 的输入(contents/decls 字符串快照),
 // 产出结果通过 _mutex 保护的 _pending* 交给主线程;worker 绝不直接碰 registry/transcript。
 #include "ai_chat.h"
+#include "3rdparty/libhv/all/client/requests.h"
 #include <fstream>
 #include <sstream>
 #include <iostream>
@@ -325,5 +326,109 @@ namespace earthai
         // 仅测试用:加锁快照 _history 并序列化,用于校验 call/response 配对
         std::lock_guard<std::mutex> g(_mutex);
         return buildContentsJson(_history);
+    }
+
+    // ---------------- GeminiProvider ----------------
+
+    // 从响应体里尽量挖出人类可读的错误摘要(promptFeedback.blockReason 或顶层 error.message),
+    // 截到 200 字符——body 本身可能很长(base64/大段文本),错误提示没必要塞爆日志/UI。
+    static std::string truncate200(const std::string& s)
+    { return s.size() > 200 ? s.substr(0, 200) : s; }
+
+    LLMTurn parseGeminiResponse(const std::string& body)
+    {
+        LLMTurn turn;
+        picojson::value v;
+        std::string perr = picojson::parse(v, body);
+        if (!perr.empty() || !v.is<picojson::object>())
+        { turn.error = "bad json: " + truncate200(perr.empty() ? body : perr); return turn; }
+
+        // candidates 缺失/为空:多半是 safety block 或顶层 error,尽量把原因带出来
+        if (!v.contains("candidates") || !v.get("candidates").is<picojson::array>()
+            || v.get("candidates").get<picojson::array>().empty())
+        {
+            if (v.contains("promptFeedback") && v.get("promptFeedback").is<picojson::object>()
+                && v.get("promptFeedback").contains("blockReason"))
+            {
+                turn.error = "blocked: " + truncate200(v.get("promptFeedback").get("blockReason").to_str());
+            }
+            else if (v.contains("error") && v.get("error").is<picojson::object>()
+                     && v.get("error").contains("message"))
+            {
+                turn.error = "api error: " + truncate200(v.get("error").get("message").to_str());
+            }
+            else turn.error = "no candidates: " + truncate200(body);
+            return turn;
+        }
+
+        const picojson::value& cand0 = v.get("candidates").get<picojson::array>()[0];
+        if (!cand0.is<picojson::object>() || !cand0.contains("content")
+            || !cand0.get("content").is<picojson::object>()
+            || !cand0.get("content").contains("parts")
+            || !cand0.get("content").get("parts").is<picojson::array>())
+        {
+            // 也可能是 finishReason=SAFETY 等,没有 content——同样尽量带出原因
+            if (cand0.is<picojson::object>() && cand0.contains("finishReason"))
+                turn.error = "no content: finishReason=" + truncate200(cand0.get("finishReason").to_str());
+            else turn.error = "no content parts: " + truncate200(body);
+            return turn;
+        }
+
+        const picojson::array& parts = cand0.get("content").get("parts").get<picojson::array>();
+        for (size_t i = 0; i < parts.size(); ++i)
+        {
+            const picojson::value& part = parts[i];
+            if (!part.is<picojson::object>()) continue;
+            if (part.contains("functionCall") && part.get("functionCall").is<picojson::object>())
+            {
+                const picojson::value& fcv = part.get("functionCall");
+                FunctionCall fc;
+                if (fcv.contains("name")) fc.name = fcv.get("name").to_str();
+                if (fc.name.empty()) continue; // 没有名字的 functionCall 没法执行,跳过
+                fc.args = fcv.contains("args") ? fcv.get("args") : picojson::value(picojson::object());
+                turn.calls.push_back(fc);
+            }
+            else if (part.contains("text") && part.get("text").is<std::string>())
+            {
+                turn.text += part.get("text").to_str();
+            }
+        }
+
+        if (turn.text.empty() && turn.calls.empty()) turn.error = "empty response";
+        return turn;
+    }
+
+    GeminiProvider::GeminiProvider(const std::string& apiKey, const std::string& model)
+        : _apiKey(apiKey), _model(model)
+    {}
+
+    LLMTurn GeminiProvider::chat(const std::string& contentsJson, const std::string& declsJson)
+    {
+        LLMTurn turn;
+        std::string body = "{\"system_instruction\":{\"parts\":[{\"text\":" +
+            picojson::value(_systemPrompt).serialize() + "}]},"
+            "\"contents\":" + contentsJson;
+        // Gemini 拒绝空 functionDeclarations 数组——declsJson 为 "[]"/空时整个 tools 字段都不带
+        if (!declsJson.empty() && declsJson != "[]")
+            body += ",\"tools\":[{\"functionDeclarations\":" + declsJson + "}]";
+        body += "}";
+
+        requests::Request req(new HttpRequest);
+        req->method = HTTP_POST;
+        req->timeout = 30;
+        // 注意:key 拼在 URL 里,下面任何日志/错误信息都不得把 req->url 整串打印出来
+        req->url = "https://generativelanguage.googleapis.com/v1beta/models/" + _model +
+                   ":generateContent?key=" + _apiKey;
+        req->headers["Content-Type"] = "application/json";
+        req->body = body;
+
+        requests::Response resp = requests::request(req);
+        if (!resp || resp->status_code != 200)
+        {
+            turn.error = "HTTP " + std::to_string(resp ? (int)resp->status_code : -1) +
+                         (resp ? (": " + truncate200(resp->body)) : "");
+            return turn;
+        }
+        return parseGeminiResponse(resp->body);
     }
 }

@@ -262,6 +262,64 @@ int main(int, char**)
         std::cout << "AIChatCore loop-limit keeps call/response paired OK\n";
     }
 
+    // ---- parseGeminiResponse:纯解析,不碰网络(Task 3)----
+    {
+        // a) 纯文本响应
+        {
+            std::string body =
+                "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"你好\"}],\"role\":\"model\"},"
+                "\"finishReason\":\"STOP\"}]}";
+            LLMTurn t = parseGeminiResponse(body);
+            CHECK(t.error.empty());
+            CHECK(t.text == u8"你好");
+            CHECK(t.calls.empty());
+        }
+        // b) functionCall 响应
+        {
+            std::string body =
+                "{\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"fly_to\","
+                "\"args\":{\"lat\":40.7,\"lon\":-74.0}}}],\"role\":\"model\"}}]}";
+            LLMTurn t = parseGeminiResponse(body);
+            CHECK(t.error.empty());
+            CHECK(t.text.empty());
+            CHECK(t.calls.size() == 1);
+            CHECK(t.calls[0].name == "fly_to");
+            CHECK(t.calls[0].args.get("lat").get<double>() > 40.0);
+        }
+        // c) 混合 parts:文本 + functionCall 都要收集到
+        {
+            std::string body =
+                "{\"candidates\":[{\"content\":{\"parts\":["
+                "{\"text\":\"帮你查一下\"},"
+                "{\"functionCall\":{\"name\":\"set_layer\",\"args\":{\"name\":\"basemap\"}}}"
+                "],\"role\":\"model\"}}]}";
+            LLMTurn t = parseGeminiResponse(body);
+            CHECK(t.error.empty());
+            CHECK(t.text == u8"帮你查一下");
+            CHECK(t.calls.size() == 1);
+            CHECK(t.calls[0].name == "set_layer");
+        }
+        // d) 空 candidates + promptFeedback.blockReason -> error
+        {
+            std::string body =
+                "{\"candidates\":[],\"promptFeedback\":{\"blockReason\":\"SAFETY\"}}";
+            LLMTurn t = parseGeminiResponse(body);
+            CHECK(!t.error.empty());
+            CHECK(t.error.find("SAFETY") != std::string::npos);
+            CHECK(t.text.empty());
+            CHECK(t.calls.empty());
+        }
+        std::cout << "parseGeminiResponse canned-body tests OK\n";
+    }
+
+    // ---- GeminiProvider 可构造、不联网也不崩 ----
+    {
+        GeminiProvider gp("dummy-key-not-real", "gemini-2.5-flash");
+        gp.setSystemPrompt(u8"你是地球助手");
+        (void)gp; // 仅验证可构造/可设置系统提示;真实网络请求见 smoke test(见 REPORT)
+        std::cout << "GeminiProvider construct OK\n";
+    }
+
     std::cout << "ai_chat tests OK\n";
     return 0;
 }

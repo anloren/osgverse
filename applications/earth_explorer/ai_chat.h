@@ -46,6 +46,21 @@ namespace earthai
     // 把历史条目序列化为 Gemini contents JSON 数组字符串;Task 3 的 GeminiProvider 直接复用
     std::string buildContentsJson(const std::vector<HistoryItem>& history);
 
+    // 纯解析函数(不含网络):把 Gemini generateContent 的响应体解析成 LLMTurn。
+    // 抽出来单独可测——防御式解析,任何字段缺失/类型不符都落到 turn.error,不抛异常。
+    LLMTurn parseGeminiResponse(const std::string& body);
+
+    // 真网络 Provider:调用 Gemini REST API(v1beta generateContent),同步阻塞,供 worker 线程调用。
+    class GeminiProvider : public LLMProvider
+    {
+    public:
+        GeminiProvider(const std::string& apiKey, const std::string& model);
+        void setSystemPrompt(const std::string& p) { _systemPrompt = p; }
+        virtual LLMTurn chat(const std::string& contentsJson, const std::string& declsJson);
+    private:
+        std::string _apiKey, _model, _systemPrompt;
+    };
+
     class AIChatCore
     {
     public:
