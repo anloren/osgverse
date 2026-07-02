@@ -222,6 +222,29 @@ static std::string createCustomPath(int type, const std::string& prefix, int x, 
     }
     else if (type == osgVerse::TileCallback::ELEVATION)
     {
+        // 香港城区平原去伪:Terrarium(SRTM 派生)是含楼高的表面模型(DSM),高楼区把楼高掺进
+        // 地形(实测尖沙咀瓦片 p90≈37m、最高 78m,真实地面仅 3-8m),再乘 TileElevationScale=2
+        // → 亮色底图被绷在 ~80-120m 的假土包上,与实景三维层(真实高度)严重错位、拉扯变形。
+        // 九龙半岛+港岛北岸本就是近乎平原 → 城区 bbox 内 z>=12 直接返回空路径(引擎语义=平坦
+        // 海平面几何),假土包消失;bbox 刻意避开太平山/狮子山/魔鬼山等真山体,山景不受影响。
+        // EARTH_HK_FLATDEM=0 可关闭(恢复原始 DEM 观感,对比用)。
+        if (z >= 12)
+        {
+            static const bool flatHK = []() {
+                const char* e = getenv("EARTH_HK_FLATDEM");
+                return !(e && *e && atoi(e) == 0);
+            }();
+            if (flatHK)
+            {
+                double n = (double)(1 << z);
+                double lonMin = (double)x / n * 360.0 - 180.0;
+                double lonMax = (double)(x + 1) / n * 360.0 - 180.0;
+                double latMax = atan(sinh(osg::PI * (1.0 - 2.0 * (double)yXYZ / n))) * 180.0 / osg::PI;
+                double latMin = atan(sinh(osg::PI * (1.0 - 2.0 * (double)(yXYZ + 1) / n))) * 180.0 / osg::PI;
+                if (lonMax > 114.115 && lonMin < 114.225 && latMax > 22.276 && latMin < 22.335)
+                    return "";
+            }
+        }
         // AWS Terrarium 高程最高约 z15。深瓦片(z>15)取 z15 **祖先瓦片**,createTile 用 elevScaleBias
         // 采子区一步烘焙正确高度 → 与 z15 父级连续、消除 LOD 边界落差/看穿孔洞;配套 EarthManipulator
         // 的相机地形地板(Step A)防穿模。一步烘焙按瓦片坐标确定性算出,无运行时继承的时序竞态。

@@ -37,3 +37,20 @@ Esri World Imagery = `https://server.arcgisonline.com/ArcGIS/rest/services/World
 - 早前"headless 同视角开关 f2 diff 仅 0.02% 但有 1413 次 KTX 转码"的矛盾未完全解释(疑与当时二进制未换干净的构建 gremlin 有关——后期同路径测试均正常可见);不阻塞。
 - `EARTH_TILT` 与 goto 动画时序冲突,低空斜视角 headless 摆不出来(相机会飘到海上/看天),验证斜视角请真机拖动。
 - dist/EarthExplorer.app 未重打包(dist 目录当前为空)。
+
+## 追加(同日)— "地面扭曲"真根因 + 香港城区平原去伪
+
+用户指出扭曲层"更亮、与建筑颜色不同"→ 推翻"f2 粗 LOD"定性。数值验证:
+**Terrarium(SRTM 派生)是含楼高的 DSM**——尖沙咀 z15 高程瓦片 p90≈37m/最高 78m
+(真实地面 3-8m),13% 像素在 20-60m;海域还有 -1151m 假深坑;再乘
+`TileElevationScale=2.0` → 城区渲染成 80-120m 假土包,亮色底图绷在上面拉扯变形,
+与 f2(真实高度、偏暗着色)错位。**这也是更早会话"地图扭曲"悬案的真根因。**
+
+修法(`earth_main.cpp` ELEVATION 分支,~20 行):九龙+港岛北岸平原 bbox
+(lat 22.276-22.335, lon 114.115-114.225)内 z>=12 返回空路径(引擎语义=平坦海平面
+几何),假土包消失;bbox 避开太平山/狮子山/魔鬼山等真山体。`EARTH_HK_FLATDEM=0` 关闭。
+不动共享插件(其 z>15 祖先烘焙写死 15,区域性改层级需双端约定,不值得)。
+
+验证:TST 效果图 = f2 建筑站平整地面、维港岸线干净、背景九龙群山(bbox 外)保留;
+flatdem on/off/on 三连跑正常退出(其间一次 SIGBUS 为 teardown 偶发抖动,与改动无关,
+静态析构期 libosg 内部 map,复现 0/3)。
