@@ -4,17 +4,36 @@
 > 用户主语言中文，请用中文回复。macOS / Apple Silicon。
 
 ---
-## ✅ 2026-07-02 会话 — 香港真实 3D Tiles 渲染破碎 bug 已修复（最新，先读这个）
+## ✅ 2026-07-02 会话 — 香港真实 3D Tiles：破碎 bug 已修复 + 纹理"问题"查明是官方预期行为（最新，先读这个）
 
-用户拿到香港地政总署免费 API key 后，真实建筑数据渲染成**灰白破碎多边形、无贴图**（不是崩溃）。官方 `3d.map.gov.hk` 门户加载同一数据完全正常 → 证明数据没问题、bug 在 osgVerse。**已定位真根因并修复**，均已提交（未 push，等你确认）：
+**本会话代码工作已全部完成、已提交(8 个 commit,`ed6257c3`..`ecb6e3b2`)、未 push**。真机已用真实 key 验证过。剩一个**用户尚未回答的决策**,新会话开场就该先问。
 
-- **决定性隔离实验**：单独一个真实 b3dm 瓦片（脱离瓦片树、走与真实场景相同网络路径）依然破碎 → bug 在单文件渲染层，不在瓦片树组合。
-- **真根因（出乎意料，不是数据解析问题）**：3D Tiles 图层挂在 `sceneCamera` 下，默认**继承**了地球的 `scattering_globe` 大气散射着色器（自己没挂程序）→ 被地表 clarity/大气混合逻辑渲染成惨白破碎面片。`LoadSceneGLTF.cpp` 的顶点/索引/纹理解码经运行时插桩验证**完全正确**，不是它的锅。
-- **修复**（`c0dd09ff`+`dcc6ad28`，仅 `applications/earth_explorer/tiles3d_data.cpp` +62行）：给这层挂一个自成一体的最小网格着色器（采样 DiffuseMap + 简单半兰伯特光照），`OVERRIDE` 覆盖继承的 globe 程序。仿照 `city_data.cpp` 建筑图层的既有模式。**`LoadSceneGLTF.cpp`/globe 着色器零改动**。
-- 顺带修复 `ReaderWriter3dTiles.cpp` 的 box→包围球计算 bug（`ed6257c3`，独立成立，不是破碎问题主因）。
-- **验证**：本地 HTTP fixture（真实数据，已提交 `applications/earth_explorer/test/hk_single_tile_fixture/`）隔离测试肉眼前后对比 + 子代理二审（合规性+代码质量，均过）+ 4 类历史回归 headless 复测 + 关钩子零影响 + 与地震/航班共存，均通过。
-- **仍待办**：真实 API 密集城区（中环）最终验证 + 用户真机肉眼对比官方门户——当前无真实 key 权限，只验证过本地 fixture（真实数据但是村镇低层建筑）。key 在手后请先用真实 API 跑一次密集区、和官方门户对比确认。
-- 详见 `docs/superpowers/plans/2026-07-01-earth-hk-3dtiles-render-fix.md`（完整排查过程+判定分支）、`docs/superpowers/plans/2026-06-24-earth-hk-3dtiles.md`（累积实现结果）。
+### 破碎 bug —— 已修复,已被用户真机确认
+
+- **决定性隔离实验**:单独一个真实 b3dm 瓦片(脱离瓦片树、走与真实场景相同网络路径)依然破碎 → bug 在单文件渲染层,不在瓦片树组合。
+- **真根因(出乎意料,不是数据解析问题)**:3D Tiles 图层挂在 `sceneCamera` 下,默认**继承**了地球的 `scattering_globe` 大气散射着色器(自己没挂程序)→ 被地表 clarity/大气混合逻辑渲染成惨白破碎面片。`LoadSceneGLTF.cpp` 的顶点/索引/纹理解码经运行时插桩验证**完全正确**,不是它的锅。
+- **修复**(`c0dd09ff`+`dcc6ad28`,仅 `applications/earth_explorer/tiles3d_data.cpp` +62行):给这层挂一个自成一体的最小网格着色器(采样 DiffuseMap + 简单半兰伯特光照),`OVERRIDE` 覆盖继承的 globe 程序。仿照 `city_data.cpp` 建筑图层的既有模式。**`LoadSceneGLTF.cpp`/globe 着色器零改动**。
+- 顺带修复 `ReaderWriter3dTiles.cpp` 的 box→包围球计算 bug(`ed6257c3`,独立成立,不是破碎问题主因)。
+- **验证链条**:本地 fixture 隔离测试肉眼前后对比 → 独立子代理二审(合规性+代码质量,均过,读了 OSG 源码真核实,不是走过场)→ 4 类历史回归 headless 复测 + 关钩子零影响 + 与地震/航班共存 → **用户用真实 key 在真机跑了交互版**,九龙密集区截图确认**建筑形状已规整**(不再是破碎多边形),shape 层面的 bug 确认修复生效。
+
+### 纹理"没贴图/发灰" —— 查明是官方数据集设计如此,不是 bug
+
+用户真机截图显示建筑规整但**大片是纯灰色无贴图**,一度怀疑修复不彻底。深挖后:
+
+- **数值铁证**:同一片密集区抽查两栋楼,一栋纹理 512×512(真实照片细节),另一栋只有 **8×8 像素**(纯色占位)——同一份数据里精度天差地别。
+- **官方文档逐字确认(非推测)**:地政总署 `hkmapmeta.gov.hk` 原文——建筑分 **Level 1/2/3**,Level 1(footprint>4㎡ 的绝大多数普通建筑)"**do not apply photorealistic texture**",只有 Level 2/3(**"prominent buildings with landmark importance"**)才 "photorealistic texture applied"。8×8 占位 = Level 1 普通楼,512×512 真贴图 = Level 2/3 地标楼,**完全吻合官方设计**,不是我们代码的锅。
+- 官方还有一个**独立产品"3D Visualisation Map"**(不同端点 `3dtiles/f2`,标榜"highly photorealistic"),`3d.map.gov.hk` 门户默认展示的很可能是这个,不是我们申请到的 `3dsd`(3D Spatial Data,偏 GIS 分析用途)——之前拿门户效果对比,是在比两个不同档次的数据产品。
+- 顺带排查过"地图扭曲"的其他可能原因,均排除:`city_data.cpp` 城市列表不含香港(无图层重叠)、GIBS 云图 404 确认无关且早于本次工作存在、Google 卫星底图深层缩放 404 确实存在但集中在市区以南海域(不在建筑聚集区)。
+- 已核实"API 迁移截止 2026-05-09"的说法是过期缓存信息,当前 API 文档页无此通知,我们用的端点结构和文档一致,无需改动。
+
+### ⚠️ 悬而未决 —— 新会话必须先向用户确认这一点
+
+上一轮我问用户:**"要不要花时间查'3D Visualisation Map API'是不是能单独申请、纹理更统一的数据源?还是你觉得现在这样可以接受,先把现有修复 push 掉?"** ——用户没有正面回答(回了一句无法理解的"0000.",追问后转向切模型、开新会话)。**这个问题原样还悬着,新会话开场应该直接重新问用户**,而不是替用户决定。
+
+- 若用户选"接受现状,先 push":直接 `git push origin master`(8 个 commit),完成收尾。
+- 若用户选"查 3D Visualisation Map":需要新一轮调研(申请方式、是否需要新 key、`3dtiles/f2` 端点实际结构)+ 判断值不值得为纹理精度重新接入一次。
+
+详见 `docs/superpowers/plans/2026-07-01-earth-hk-3dtiles-render-fix.md`(完整排查过程+判定分支)、`docs/superpowers/plans/2026-06-24-earth-hk-3dtiles.md`(累积实现结果)。
 
 ---
 ## ✅ 2026-06-24 会话 — 香港官方 3D Tiles 接入 spike（最新,先读这个）
