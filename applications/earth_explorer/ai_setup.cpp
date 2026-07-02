@@ -2,6 +2,7 @@
 #include "quake_data.h"
 #include "flight_data.h"
 #include "ai_ui.h"
+#include "ai_media.h"
 #include <readerwriter/EarthManipulator.h>
 #include <modeling/Math.h>
 #include <osg/Notify>
@@ -46,16 +47,19 @@ static earthai::Tool makeSummaryTool(const std::string& name, const std::string&
 class AIFrameHandler : public osgGA::GUIEventHandler
 {
     earthai::AIChatCore* _core;
+    earthai::MediaManager* _media;   // 可为 null(无 key 且无 EARTH_AI_FAKE_IMG)
     std::string _autoSubmitText; int _delayFrames; int _frameCount; bool _fired;
 public:
-    AIFrameHandler(earthai::AIChatCore* c, const std::string& autoSubmitText, int delayFrames)
-        : _core(c), _autoSubmitText(autoSubmitText), _delayFrames(delayFrames),
+    AIFrameHandler(earthai::AIChatCore* c, earthai::MediaManager* media,
+                   const std::string& autoSubmitText, int delayFrames)
+        : _core(c), _media(media), _autoSubmitText(autoSubmitText), _delayFrames(delayFrames),
           _frameCount(0), _fired(false) {}
     virtual bool handle(const osgGA::GUIEventAdapter& ea, osgGA::GUIActionAdapter&)
     {
         if (ea.getEventType() == osgGA::GUIEventAdapter::FRAME)
         {
             _core->drainMainThread();
+            if (_media) _media->update();
             if (!_fired && !_autoSubmitText.empty() && _frameCount >= _delayFrames)
             { _core->submit(_autoSubmitText); _fired = true; }
             if (!_fired) ++_frameCount;
@@ -68,13 +72,30 @@ earthai::AIChatCore* configureAIChat(osgViewer::Viewer& viewer,
                                      osgVerse::EarthManipulator* mani,
                                      LayerManager* layerMgr,
                                      QuakeLayer* quakeLayer, FlightLayer* flightLayer,
-                                     AIChatUI* ui)
+                                     AIChatUI* ui,
+                                     earthai::MediaManager** outMedia)
 {
+    if (outMedia) *outMedia = nullptr;
     // ---- AI Chat（spec: docs/superpowers/specs/2026-07-02-earth-ai-chat-design.md）----
     // 无 EARTH_AI_KEY 且无 EARTH_AI_FAKE → aiCore 为空，后续全部跳过，零影响。
     // registry/aiCore 用裸指针、进程生命周期存活，与本文件其余单例/裸 new 风格一致。
     earthai::ToolRegistry* aiRegistry = new earthai::ToolRegistry;
     earthai::AIChatCore* aiCore = nullptr;
+
+    // MediaManager(Task 8 快照+生图管线)先于 aiRegistry 构造完:generate_photo 工具的
+    // execute 需要捕获它的指针。EARTH_AI_KEY 在这里先读一次(下面 aiCore 构造再读一次
+    // 不冲突,getenv 本身可重复调用);EARTH_AI_FAKE_IMG 的读取封装在 MediaManager 内部
+    // (ai_media.cpp::fakeImgPath),此处只需知道"要不要 new"——用同样的条件判断。
+    const char* aiKeyForMedia = getenv("EARTH_AI_KEY");
+    const char* fakeImgEnv = getenv("EARTH_AI_FAKE_IMG");
+    earthai::MediaManager* mediaMgr = nullptr;
+    if ((aiKeyForMedia && *aiKeyForMedia) || (fakeImgEnv && *fakeImgEnv))
+    {
+        mediaMgr = new earthai::MediaManager(&viewer, ui ? ui->cards() : nullptr,
+            (aiKeyForMedia && *aiKeyForMedia) ? std::string(aiKeyForMedia) : std::string());
+    }
+    if (outMedia) *outMedia = mediaMgr;
+
     {
         earthai::Tool fly; fly.name = "fly_to";
         fly.description = u8"把相机飞到指定经纬度与高度。用户说地名时你自己换算经纬度。";
@@ -221,6 +242,46 @@ earthai::AIChatCore* configureAIChat(osgViewer::Viewer& viewer,
             picojson::object r; r["ok"] = picojson::value(true); return picojson::value(r);
         };
         aiRegistry->add(chart);
+
+        // generate_photo:抓当前渲染帧 → 喂给 Gemini 图像模型 → 生成实拍照片,异步 Job,
+        // 结果出现在右上角照片卡(见 ai_media.cpp/ai_cards.cpp)。mediaMgr 为空(无 key 也
+        // 无 EARTH_AI_FAKE_IMG)时直接报错,不注册也可以,但注册后模型能看到"为什么不行"
+        // 比工具压根不存在更利于它跟用户解释。
+        earthai::Tool photo; photo.name = "generate_photo";
+        photo.description = u8"截取当前三维地球视角并生成一张同地点同视角的写实照片,"
+            u8"异步执行(不会阻塞对话),结果出现在屏幕右上角的照片卡片里。"
+            u8"style 可选:风格/时代/天气描述(如“黄昏”“雪天”“1900 年老照片风格”)。";
+        photo.parametersJson = "{\"type\":\"object\",\"properties\":{"
+            "\"style\":{\"type\":\"string\",\"description\":\"可选:风格/时代/天气描述\"}}}";
+        earthai::MediaManager* mediaPtr = mediaMgr;
+        osgVerse::EarthManipulator* maniPhoto = mani;
+        photo.execute = [mediaPtr, maniPhoto](const picojson::value& args) {
+            if (!mediaPtr)
+            {
+                picojson::object err;
+                err["error"] = picojson::value(std::string(
+                    "media pipeline unavailable (no EARTH_AI_KEY / EARTH_AI_FAKE_IMG)"));
+                return picojson::value(err);
+            }
+            std::string style;
+            if (args.is<picojson::object>() && args.contains("style")
+                && args.get("style").is<std::string>())
+                style = args.get("style").get<std::string>();
+
+            bool haveView = false; double lat = 0.0, lon = 0.0, altKm = 0.0;
+            if (maniPhoto)
+            {
+                osg::Vec3d lla = maniPhoto->computeEyeLatLonHeight();
+                lat = osg::RadiansToDegrees(lla[0]);
+                lon = osg::RadiansToDegrees(lla[1]);
+                altKm = lla[2] / 1000.0;
+                haveView = true;
+            }
+            picojson::value r = mediaPtr->startPhotoJob(style, lat, lon, altKm, haveView);
+            OSG_NOTICE << "[AIChat] generate_photo -> " << r.serialize() << std::endl;
+            return r;
+        };
+        aiRegistry->add(photo);
     }
     const char* aiKey = getenv("EARTH_AI_KEY");
     const char* aiFake = getenv("EARTH_AI_FAKE");
@@ -247,7 +308,7 @@ earthai::AIChatCore* configureAIChat(osgViewer::Viewer& viewer,
         const char* autoSubmit = getenv("EARTH_AI_AUTOSUBMIT");   // headless E2E 用
         const char* delayEnv = getenv("EARTH_AI_AUTOSUBMIT_DELAY_FRAMES");
         int delayFrames = (delayEnv && *delayEnv) ? atoi(delayEnv) : 0;
-        viewer.addEventHandler(new AIFrameHandler(aiCore,
+        viewer.addEventHandler(new AIFrameHandler(aiCore, mediaMgr,
             (autoSubmit && *autoSubmit) ? autoSubmit : "", delayFrames));
     }
     return aiCore;

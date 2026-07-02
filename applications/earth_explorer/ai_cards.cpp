@@ -1,9 +1,12 @@
 // applications/earth_explorer/ai_cards.cpp
 // 从 ai_ui.cpp 抽出(Task 8 PART A):卡片容器 AICardPanel 的存储/堆叠/绘制 + 4 种
-// 图表手绘渲染器 + 数值/取值小工具。纯移动,逻辑与原 ai_ui.cpp 版本逐行一致。
+// 图表手绘渲染器 + 数值/取值小工具。图表部分纯移动,逻辑与原 ai_ui.cpp 版本逐行一致;
+// 照片卡(drawPhotoCard/pushPhoto)是 Task 8 新增。
 #include "ai_cards.h"
 #include <ui/ImGuiComponents.h>
+#include <osg/Notify>
 #include <cstring>
+#include <cstdlib>
 #include <cmath>
 #include <algorithm>
 
@@ -15,6 +18,30 @@ void AICardPanel::pushChart(const picojson::value& spec)
     AICard c; c.type = AICard::CHART; c.spec = spec; c.open = true;
     c.serial = _nextSerial++;
     _cards.push_back(c);
+}
+
+// 由 MediaManager::update() 在生图 Job 完成(DONE)时调用,主线程同源(见上方注释),无需加锁。
+void AICardPanel::pushPhoto(const std::string& pngPath, const std::string& title)
+{
+    AICard c; c.type = AICard::PHOTO; c.path = pngPath; c.title = title; c.open = true;
+    c.serial = _nextSerial++;
+    _cards.push_back(c);
+}
+
+// 由 MediaManager::startPhotoJob() 在建 Job 后立即调用(同一主线程,无需加锁)。
+void AICardPanel::pushJob(earthai::JobManager* jobs, int jobId, const std::string& title)
+{
+    AICard c; c.type = AICard::JOB; c.jobs = jobs; c.jobId = jobId; c.title = title; c.open = true;
+    c.serial = _nextSerial++;
+    _cards.push_back(c);
+}
+
+// 由 MediaManager::update() 在 Job 结束(DONE/FAILED)时调用,把进度卡从堆叠里摘掉——
+// DONE 那一刻调用方会紧接着 pushPhoto() 换上结果卡,FAILED 则直接消失(错误已走 OSG_WARN)。
+void AICardPanel::removeJob(int jobId)
+{
+    for (size_t i = 0; i < _cards.size(); ++i)
+        if (_cards[i].type == AICard::JOB && _cards[i].jobId == jobId) { _cards[i].open = false; break; }
 }
 
 // ---- 右上角图表卡堆叠 ----
@@ -62,9 +89,16 @@ void AICardPanel::draw()
         ImGui::SetNextWindowSize(ImVec2(kCardWidth, 0.0f), ImGuiCond_Always);
 
         std::string title = u8"图表 Chart";
-        if (c.type == AICard::CHART && c.spec.is<picojson::object>() && c.spec.contains("title")
-            && c.spec.get("title").is<std::string>())
-            title = c.spec.get("title").get<std::string>();
+        if (c.type == AICard::CHART)
+        {
+            if (c.spec.is<picojson::object>() && c.spec.contains("title")
+                && c.spec.get("title").is<std::string>())
+                title = c.spec.get("title").get<std::string>();
+        }
+        else if (c.type == AICard::PHOTO)
+            title = c.title.empty() ? u8"实景照片" : c.title;
+        else if (c.type == AICard::JOB)
+            title = c.title.empty() ? u8"生成中" : c.title;
 
         bool open = c.open;
         // ImGui 窗口的身份(ID)只看 "###" 之后的部分，不看它前面的可见标题；
@@ -81,6 +115,8 @@ void AICardPanel::draw()
             // 用内容区宽度(已扣除 WindowPadding)而不是窗口全宽常量传给 drawChartCard，
             // 否则条形图/折线图右缘的数值文字会被 WindowPadding 裁掉一部分。
             if (c.type == AICard::CHART) drawChartCard(c.spec, ImGui::GetContentRegionAvail().x);
+            else if (c.type == AICard::PHOTO) drawPhotoCard(c);
+            else if (c.type == AICard::JOB) drawJobCard(c);
             else ImGui::TextDisabled(u8"（暂未实现的卡片类型）");
             // 必须在 End() 之前读:GetWindowSize() 取的是"当前窗口"的尺寸，End() 之后
             // 当前窗口上下文已经弹出，再读到的就不是这张卡片的高度了(踩过的坑)。
@@ -350,4 +386,47 @@ void AICardPanel::drawChartCard(const picojson::value& spec, float width)
     else if (type == "line") drawLineChart(dl, origin, width, labels, values);
     else if (type == "stat") drawStatChart(labels, values);
     else drawBarChart(dl, origin, width, labels, values);   // 默认/未知类型按 bar 处理
+}
+
+// ---- 照片卡(Task 8):文件名 + 「打开」按钮,用系统默认查看器打开(macOS `open`)。----
+// 缩略图故意跳过:ImGui 需要把 PNG 解码上传成 GL 纹理再画 image()——这条纹理管线在本文件
+// (纯 ImDrawList 手绘,零额外依赖)里没有现成基础设施,留给后续任务按需补。
+static std::string basename(const std::string& path)
+{
+    size_t slash = path.find_last_of("/\\");
+    return (slash == std::string::npos) ? path : path.substr(slash + 1);
+}
+
+void AICardPanel::drawPhotoCard(const AICard& c)
+{
+    ImGui::TextWrapped("%s", basename(c.path).c_str());
+    if (c.path.empty())
+    {
+        ImGui::TextDisabled(u8"（无文件）");
+        return;
+    }
+    if (ImGui::Button(u8"打开"))
+    {
+        // macOS `open`;路径用单引号包住防止空格/特殊字符断开命令(与 spec 约定一致)。
+        std::string cmd = "open '" + c.path + "'";
+        int rc = system(cmd.c_str());
+        if (rc != 0) OSG_WARN << "[AIChat] open photo failed, rc=" << rc << " path=" << c.path << std::endl;
+    }
+}
+
+// ---- 进行中任务卡(Task 8):转轮 + 进度条,实时从 JobManager 读(不缓存快照,避免过期)。
+// DONE/FAILED 由 MediaManager::update() 主动 removeJob() 摘掉,这里画的始终是"进行中"态,
+// 因此拿不到 job(理论上不会发生,防御一下)就显示占位文案而不是崩溃。
+void AICardPanel::drawJobCard(const AICard& c)
+{
+    earthai::AIJob job;
+    if (!c.jobs || !c.jobs->get(c.jobId, job))
+    {
+        ImGui::TextDisabled(u8"（任务信息不可用）");
+        return;
+    }
+    static const char spin[4] = { '|', '/', '-', '\\' };
+    int idx = (int)(ImGui::GetTime() * 8.0) % 4;
+    ImGui::Text(u8"生成中 %c", spin[idx]);
+    ImGui::ProgressBar(job.progress, ImVec2(-1.0f, 0.0f));
 }

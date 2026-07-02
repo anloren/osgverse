@@ -13,7 +13,7 @@ void AIChatUI::pushChart(const picojson::value& spec)
     _cards.pushChart(spec);
 }
 
-void AIChatUI::draw(earthai::AIChatCore* core)
+void AIChatUI::draw(earthai::AIChatCore* core, earthai::MediaManager* media)
 {
     ImGuiIO& io = ImGui::GetIO();
     float winWidth = (720.0f < io.DisplaySize.x * 0.6f) ? 720.0f : io.DisplaySize.x * 0.6f;
@@ -147,19 +147,24 @@ void AIChatUI::draw(earthai::AIChatCore* core)
 
         if (!core || busy) ImGui::EndDisabled();
 
+        bool photoSubmit = false;
         if (core)
         {
-            // 照片/视频生成入口（Task 8/9 接线）；本任务只画禁用按钮 + tooltip。
+            // 照片生成入口（Task 8 接线，见 ai_media.h/MediaManager）；视频（Task 9）仍占位禁用。
             // 内置中文字体（ChineseFull 范围）不含 emoji glyph，📷/🎬 会渲染成方块（tofu），
             // 因此用文字标签"照片"/"视频"代替。
             ImGui::SameLine();
-            ImGui::BeginDisabled();
-            ImGui::Button(u8"照片", ImVec2(40.0f, 0.0f));
-            ImGui::EndDisabled();
+            bool photoEnabled = (core && media && !busy);
+            if (!photoEnabled) ImGui::BeginDisabled();
+            if (ImGui::Button(u8"照片", ImVec2(40.0f, 0.0f))) photoSubmit = true;
+            if (!photoEnabled) ImGui::EndDisabled();
             // ImGui 1.92 起 IsItemHovered() 默认对禁用项返回 false，需显式加
             // ImGuiHoveredFlags_AllowWhenDisabled 才能在禁用按钮上弹出 tooltip。
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                ImGui::SetTooltip(u8"生成照片（即将上线）");
+            {
+                ImGui::SetTooltip(media ? u8"生成当前视角实景照片，约 $0.04/张"
+                                        : u8"生成照片（需设置 EARTH_AI_KEY）");
+            }
 
             ImGui::SameLine();
             ImGui::BeginDisabled();
@@ -169,6 +174,10 @@ void AIChatUI::draw(earthai::AIChatCore* core)
                 ImGui::SetTooltip(u8"生成视频（即将上线）");
         }
 
+        // 📷 走对话代理循环（而不是直接调用 MediaManager）：保持"一切能力皆工具"的架构,
+        // 且让用户在对话历史里看到这次操作的记录；FAKE 模式下 fixture 脚本需要自己调用
+        // generate_photo(见 test/ai_fake_photo.json)。
+        if (photoSubmit && core) core->submit(u8"生成一张当前视角的实景照片");
         if (submitted && core) core->submit(submitText);
     }
     ImGui::End();

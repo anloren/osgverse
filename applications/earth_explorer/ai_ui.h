@@ -5,6 +5,8 @@
 #include <picojson.h>
 #include <string>
 
+namespace earthai { class MediaManager; }
+
 // 底部悬浮聊天条：输入框 + 历史面板（历史在输入行上方，同一窗口内）+ 右上角卡片堆叠
 // (卡片存储/绘制委托给 AICardPanel，见 ai_cards.h)。
 // core 为 null 时画禁用态输入框（提示设置 EARTH_AI_KEY），不画历史/按钮——对无 AI 场景零干扰。
@@ -12,7 +14,8 @@ class AIChatUI
 {
 public:
     AIChatUI();
-    void draw(earthai::AIChatCore* core);
+    // media 为空(未配置 key/EARTH_AI_FAKE_IMG)时📷按钮保持禁用态,其余不受影响。
+    void draw(earthai::AIChatCore* core, earthai::MediaManager* media = nullptr);
 
     // 主线程调用(工具 execute 在 drain 中,与 draw() 同线程,无需加锁——见 ai_cards.cpp 头注释)。
     // 转发给 _cards,保留原有调用方(ai_setup.cpp 的 show_chart 工具)不必改动。
