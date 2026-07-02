@@ -1,6 +1,7 @@
 #include "ai_setup.h"
 #include "quake_data.h"
 #include "flight_data.h"
+#include "ai_ui.h"
 #include <readerwriter/EarthManipulator.h>
 #include <modeling/Math.h>
 #include <osg/Notify>
@@ -66,7 +67,8 @@ public:
 earthai::AIChatCore* configureAIChat(osgViewer::Viewer& viewer,
                                      osgVerse::EarthManipulator* mani,
                                      LayerManager* layerMgr,
-                                     QuakeLayer* quakeLayer, FlightLayer* flightLayer)
+                                     QuakeLayer* quakeLayer, FlightLayer* flightLayer,
+                                     AIChatUI* ui)
 {
     // ---- AI Chat（spec: docs/superpowers/specs/2026-07-02-earth-ai-chat-design.md）----
     // 无 EARTH_AI_KEY 且无 EARTH_AI_FAKE → aiCore 为空，后续全部跳过，零影响。
@@ -182,6 +184,43 @@ earthai::AIChatCore* configureAIChat(osgViewer::Viewer& viewer,
             "flights", lmptr,
             [fSummaryPtr]() { return fSummaryPtr ? fSummaryPtr->summaryJson() : std::string("{}"); },
             [fSummaryPtr]() { return fSummaryPtr && fSummaryPtr->isEnabled(); }));
+
+        // show_chart:模型把统计数据整理成 spec,推给右上角图表卡(AIChatUI::pushChart)。
+        // execute 就在 AIChatCore::drainMainThread 里跑(主线程),与 UI draw() 同线程,
+        // pushChart 内部因此不需要加锁(见 ai_ui.cpp 头注释)。
+        earthai::Tool chart; chart.name = "show_chart";
+        chart.description = u8"把数据画成图表卡片,显示在屏幕右上角。"
+            u8"type 取值 bar(横向条形图)/donut(环形图)/line(折线图)/stat(单个大数字);"
+            u8"labels 与 values 两个数组需等长,分别是每项的标签与数值(stat 图只用第一项:"
+            u8"values[0] 是大数字,labels[0] 可选,作为副标题)。"
+            u8"适合在用户要求“画个图”“统计一下”“可视化”之类需求,或你自己觉得图表比文字更清楚时调用。";
+        chart.parametersJson = "{\"type\":\"object\",\"properties\":{"
+            "\"type\":{\"type\":\"string\",\"enum\":[\"bar\",\"donut\",\"line\",\"stat\"]},"
+            "\"title\":{\"type\":\"string\"},"
+            "\"labels\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},"
+            "\"values\":{\"type\":\"array\",\"items\":{\"type\":\"number\"}}},"
+            "\"required\":[\"type\",\"values\"]}";
+        chart.execute = [ui](const picojson::value& args) {
+            if (!ui)
+            {
+                picojson::object err; err["error"] = picojson::value("ui unavailable");
+                return picojson::value(err);
+            }
+            if (!args.is<picojson::object>() || !args.contains("type")
+                || !args.get("type").is<std::string>() || !args.contains("values")
+                || !args.get("values").is<picojson::array>())
+            {
+                picojson::object err;
+                err["error"] = picojson::value("spec needs string \"type\" and array \"values\"");
+                return picojson::value(err);
+            }
+            std::string t = args.get("type").get<std::string>();
+            size_t n = args.get("values").get<picojson::array>().size();
+            ui->pushChart(args);
+            OSG_NOTICE << "[AIChat] show_chart type=" << t << " items=" << n << std::endl;
+            picojson::object r; r["ok"] = picojson::value(true); return picojson::value(r);
+        };
+        aiRegistry->add(chart);
     }
     const char* aiKey = getenv("EARTH_AI_KEY");
     const char* aiFake = getenv("EARTH_AI_FAKE");

@@ -629,8 +629,11 @@ int main(int argc, char** argv)
         layerMgr.setEnabled("hk3d", t3->enabled);
     }
 
+    // AIChatUI 先于 configureAIChat 创建：show_chart 工具的 execute 需要拿到它的指针
+    // 才能把图表 spec 推进右上角卡片队列（同一个实例后面又挂到 ctrlUI->_aiUI 供 draw() 用）。
+    AIChatUI* aiUI = new AIChatUI;
     earthai::AIChatCore* aiCore = configureAIChat(
-        viewer, earthManipulator.get(), &layerMgr, quakeLayer, flightLayer);
+        viewer, earthManipulator.get(), &layerMgr, quakeLayer, flightLayer, aiUI);
 
     // ImGui 控制面板 — 挂到最终 HUD 相机（cameras[3]），确保在地球图像之上绘制
     osg::ref_ptr<osgVerse::ImGuiManager> imgui = new osgVerse::ImGuiManager;
@@ -639,7 +642,7 @@ int main(int argc, char** argv)
     ctrlUI->_layers = &layerMgr;
     ctrlUI->_quake = quakeLayer;
     ctrlUI->_flight = flightLayer;
-    ctrlUI->_aiUI = new AIChatUI;
+    ctrlUI->_aiUI = aiUI;
     ctrlUI->_aiCore = aiCore;
     imgui->initialize(ctrlUI, false);
     imgui->addToView(&viewer, cameras[3]);  // cameras[3] = finalCamera (HUD, renders to screen)

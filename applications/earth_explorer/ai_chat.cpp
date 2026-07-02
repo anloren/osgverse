@@ -330,7 +330,8 @@ namespace earthai
                 result = picojson::value(errObj);
             }
 
-            std::string note = u8"⚙ " + fc.name + "(" + fc.args.serialize() + ")";
+            // 内置中文字体(ChineseFull 范围)不含 ⚙ 的 glyph,会渲染成方块(tofu),改用文字前缀。
+            std::string note = u8"[工具] " + fc.name + "(" + fc.args.serialize() + ")";
             std::lock_guard<std::mutex> g(_mutex);
             ChatEntry e; e.kind = ChatEntry::TOOL_NOTE; e.text = note;
             _transcript.push_back(e);

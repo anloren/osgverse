@@ -1,0 +1,4 @@
+[{"calls":[{"name":"show_chart","args":{"type":"donut","title":"图层占比","labels":["地震","航班","降水"],"values":[3,5,2]}}]},
+ {"calls":[{"name":"show_chart","args":{"type":"stat","title":"当前地震数","labels":["过去24小时"],"values":[7]}}]},
+ {"calls":[{"name":"show_chart","args":{"type":"line","title":"航班速度趋势","labels":["10:00","10:10","10:20","10:30","10:40"],"values":[420,455,430,500,480]}}]},
+ {"text":"三张图表已生成"}]
