@@ -1,6 +1,7 @@
 #include "ai_ui.h"
 #include <ui/ImGuiComponents.h>
 #include <cstring>
+#include <cmath>
 #include <algorithm>
 
 AIChatUI::AIChatUI() : _historyCollapsed(false), _lastEntryCount(0)
@@ -14,6 +15,7 @@ AIChatUI::AIChatUI() : _historyCollapsed(false), _lastEntryCount(0)
 void AIChatUI::pushChart(const picojson::value& spec)
 {
     AICard c; c.type = AICard::CHART; c.spec = spec; c.open = true;
+    c.serial = _nextSerial++;
     _cards.push_back(c);
 }
 
@@ -193,6 +195,10 @@ void AIChatUI::draw(earthai::AIChatCore* core)
 // 越过底部保留区,越过就向左开新列。地震/航班详情卡只占最右列,所以向左的新列可以
 // 从 y=20 顶部开始,不会压到它们。极端很多卡时列数不设上限、一直向左铺
 // (实际场景卡片就个位数,不做更多处理)。
+// 已知权衡:1280 逻辑宽下,第二列(向左新列)的右边界会与左侧控制面板(约 610px 宽,
+// 详见 draw() 里 kLeftPanelClearance=630 的注释)相交约 40px。这里不做进一步避让——
+// 卡片可以 [x] 关闭、面板可以拖动/折叠,用户的偏好是"信息面板右上角、操作面板左上角"
+// 这种逻辑分区(见 ui-info-panels-top-right 偏好),而不是要求两者像素级不相交。
 void AIChatUI::drawCards()
 {
     if (_cards.empty()) return;
@@ -232,13 +238,17 @@ void AIChatUI::drawCards()
         // ImGui 窗口的身份(ID)只看 "###" 之后的部分，不看它前面的可见标题；
         // 若所有卡片都用同一个 "###ai_card" 后缀，无论标题文字是什么，三张卡会被
         // 当成同一个窗口(后画的盖掉先画的、位置/尺寸互相污染)——这里踩过一次坑。
-        // 用卡片在 vector 中的下标拼进 ID 后缀，确保每张卡是独立窗口。
-        std::string winId = title + "###ai_card_" + std::to_string(i);
+        // 用卡片的 serial(而非 vector 下标)拼进 ID 后缀:下标会因为前面的卡关闭而
+        // 左移，同一张卡在关卡前后被 ImGui 认成两个不同窗口，产生一帧闪烁/错位；
+        // serial 在 pushChart 时分配、卡片存活期间不变，不受其它卡关闭影响。
+        std::string winId = title + "###ai_card_" + std::to_string(c.serial);
         float cardH = c.lastHeight;   // 上一帧没测到时(首次绘制)先用缓存的兜底值
         if (ImGui::Begin(winId.c_str(), &open,
                          ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse))
         {
-            if (c.type == AICard::CHART) drawChartCard(c.spec, kCardWidth);
+            // 用内容区宽度(已扣除 WindowPadding)而不是窗口全宽常量传给 drawChartCard，
+            // 否则条形图/折线图右缘的数值文字会被 WindowPadding 裁掉一部分。
+            if (c.type == AICard::CHART) drawChartCard(c.spec, ImGui::GetContentRegionAvail().x);
             else ImGui::TextDisabled(u8"（暂未实现的卡片类型）");
             // 必须在 End() 之前读:GetWindowSize() 取的是"当前窗口"的尺寸，End() 之后
             // 当前窗口上下文已经弹出，再读到的就不是这张卡片的高度了(踩过的坑)。
@@ -264,7 +274,27 @@ static double numOr(const picojson::value& v, double fallback)
     return v.is<double>() ? v.get<double>() : fallback;
 }
 
-// 从 spec 里取 labels[]/values[] 的公共部分(按 min 长度对齐),分别转成 string/double 数组。
+// ---- 数值格式化小工具:整数样式的值用 %lld 显示,否则 %.1f ----
+// 原先各处直接写 `v == (double)(long long)v` 判断"是不是整数",对 NaN/inf/
+// 超出 long long 范围的巨大值(如 1e20)做 (long long) 转换是未定义行为(UB)。
+// 这里先做有限性+范围检查,异常值统一走 %.3g 兜底,再进整数/小数分支。
+static void formatNum(char* buf, size_t n, double v)
+{
+    if (!(fabs(v) < 9e15))   // 覆盖 NaN(比较恒假)、+-inf、超出安全整数范围的巨大值
+    {
+        snprintf(buf, n, "%.3g", v);
+        return;
+    }
+    long long iv = (long long)v;
+    if (v == (double)iv) snprintf(buf, n, "%lld", iv);
+    else snprintf(buf, n, "%.1f", v);
+}
+
+// 从 spec 里取 labels[]/values[] 数组,分别转成 string/double 数组。
+// 以 values 为准对齐:labels 不足时用 "" 补齐到 values.size(),labels 多则截断。
+// 工具 schema 的 required 只有 type+values(见 ai_setup.cpp show_chart.parametersJson),
+// labels 本就是可选参数(stat 图的 labels[0] 副标题尤其常被省略),不能按 min 长度双向
+// 截断——否则合法调用如 {"type":"stat","values":[7]} 会被截成空数据,整卡显示"无数据"。
 static void extractLabelsValues(const picojson::value& spec,
                                 std::vector<std::string>& labels, std::vector<double>& values)
 {
@@ -280,8 +310,7 @@ static void extractLabelsValues(const picojson::value& spec,
         for (size_t i = 0; i < arr.size(); ++i)
             values.push_back(numOr(arr[i], 0.0));
     }
-    size_t n = std::min(labels.size(), values.size());
-    labels.resize(n); values.resize(n);
+    labels.resize(values.size());   // 不足补 ""(resize 默认值),多则截断
 }
 
 // 六色调色板(hue 均分),donut 分片按序取色；用于区分不同切片而不需要每次算 HSV。
@@ -328,9 +357,7 @@ static void drawBarChart(ImDrawList* dl, ImVec2 origin, float width,
 
         // 数值(右)
         char buf[32];
-        double raw = values[i];
-        if (raw == (double)(long long)raw) snprintf(buf, sizeof(buf), "%lld", (long long)raw);
-        else snprintf(buf, sizeof(buf), "%.1f", raw);
+        formatNum(buf, sizeof(buf), values[i]);
         dl->AddText(ImVec2(barX + barAreaW + 8.0f, y + 3.0f), IM_COL32(230, 230, 230, 255), buf);
 
         y += rowH + rowGap;
@@ -370,8 +397,7 @@ static void drawDonutChart(ImDrawList* dl, ImVec2 origin, float width,
 
     // 中心大数字(总计)
     char totBuf[32];
-    if (total == (double)(long long)total) snprintf(totBuf, sizeof(totBuf), "%lld", (long long)total);
-    else snprintf(totBuf, sizeof(totBuf), "%.1f", total);
+    formatNum(totBuf, sizeof(totBuf), total);
     ImVec2 tSize = ImGui::CalcTextSize(totBuf);
     dl->AddText(ImVec2(center.x - tSize.x * 0.5f, center.y - tSize.y * 0.5f),
                IM_COL32(255, 255, 255, 255), totBuf);
@@ -385,12 +411,9 @@ static void drawDonutChart(ImDrawList* dl, ImVec2 origin, float width,
         dl->AddCircleFilled(ImVec2(p.x + 6.0f, p.y + 8.0f), 5.0f, sliceColor(i));
         ImGui::Dummy(ImVec2(16.0f, 0.0f));
         ImGui::SameLine();
-        char buf[64];
-        double v = values[i];
-        if (v == (double)(long long)v)
-            snprintf(buf, sizeof(buf), "%s: %lld", labels[i].c_str(), (long long)v);
-        else
-            snprintf(buf, sizeof(buf), "%s: %.1f", labels[i].c_str(), v);
+        char numBuf[32], buf[96];
+        formatNum(numBuf, sizeof(numBuf), values[i]);
+        snprintf(buf, sizeof(buf), "%s: %s", labels[i].c_str(), numBuf);
         ImGui::TextUnformatted(buf);
     }
 }
@@ -414,13 +437,20 @@ static void drawLineChart(ImDrawList* dl, ImVec2 origin, float width,
         pts[i] = ImVec2(x, y);
     }
 
-    // 折线下方填充(简单梯形近似:折线 + 底边闭合成一个凸/近凸多边形；数据点少时视觉足够)
+    // 折线下方填充:逐段画梯形(而不是把整条折线所有顶点丢给 AddConvexPolyFilled)。
+    // 折线顶边 + 底边两角拼成的多边形,只要数据不是单调的(如 420→455→430→500→480
+    // 这种有起伏的锯齿数据)就是凹多边形——ImGui 的 convex fill 对凹多边形填色会出错,
+    // 颜色可能涂到折线上方、或半透明区深浅不均。改成对每相邻两点 pts[i]/pts[i+1] 单独
+    // 画一个梯形(两个顶点在折线上、两个顶点在底边上),每个梯形都必然是凸的,不会出错。
     if (pts.size() >= 2)
     {
-        std::vector<ImVec2> fillPts = pts;
-        fillPts.push_back(ImVec2(pts.back().x, origin.y + chartH));
-        fillPts.push_back(ImVec2(pts.front().x, origin.y + chartH));
-        dl->AddConvexPolyFilled(fillPts.data(), (int)fillPts.size(), IM_COL32(90, 170, 255, 40));
+        const ImU32 fillCol = IM_COL32(90, 170, 255, 40);
+        float baseY = origin.y + chartH;
+        for (size_t i = 0; i + 1 < pts.size(); ++i)
+        {
+            dl->AddQuadFilled(pts[i], pts[i + 1], ImVec2(pts[i + 1].x, baseY), ImVec2(pts[i].x, baseY),
+                              fillCol);
+        }
     }
     if (pts.size() >= 2)
         dl->AddPolyline(pts.data(), (int)pts.size(), IM_COL32(90, 170, 255, 255), 0, 2.0f);
@@ -444,13 +474,11 @@ static void drawLineChart(ImDrawList* dl, ImVec2 origin, float width,
     }
 }
 
-static void drawStatChart(const picojson::value& spec, const std::vector<std::string>& labels,
-                          const std::vector<double>& values)
+static void drawStatChart(const std::vector<std::string>& labels, const std::vector<double>& values)
 {
     double v = values.empty() ? 0.0 : values[0];
     char buf[32];
-    if (v == (double)(long long)v) snprintf(buf, sizeof(buf), "%lld", (long long)v);
-    else snprintf(buf, sizeof(buf), "%.2f", v);
+    formatNum(buf, sizeof(buf), v);
 
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
     ImGui::SetWindowFontScale(2.2f);
@@ -459,7 +487,6 @@ static void drawStatChart(const picojson::value& spec, const std::vector<std::st
     ImGui::PopStyleColor();
 
     if (!labels.empty()) ImGui::TextDisabled("%s", labels[0].c_str());
-    (void)spec;
 }
 
 void AIChatUI::drawChartCard(const picojson::value& spec, float width)
@@ -489,6 +516,6 @@ void AIChatUI::drawChartCard(const picojson::value& spec, float width)
 
     if (type == "donut") drawDonutChart(dl, origin, width, labels, values);
     else if (type == "line") drawLineChart(dl, origin, width, labels, values);
-    else if (type == "stat") drawStatChart(spec, labels, values);
+    else if (type == "stat") drawStatChart(labels, values);
     else drawBarChart(dl, origin, width, labels, values);   // 默认/未知类型按 bar 处理
 }

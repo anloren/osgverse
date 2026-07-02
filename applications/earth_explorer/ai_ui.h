@@ -17,6 +17,11 @@ struct AICard
     // 才确定,当帧再拿去摆下一张卡的位置会有一帧延迟——缓存上一帧的值,下一帧堆叠用它,
     // 首帧(=0)时给个保守估计,避免第一帧卡片重叠。
     float lastHeight = 0.0f;
+    // 卡片的稳定身份,用于拼 ImGui 窗口 ID(见 AIChatUI::drawCards 注释)。
+    // 不能用 vector 下标:关掉第 i 张卡后,后面的卡下标会左移,ImGui 按 ID 认窗口,
+    // 下标变了就被当成一个新窗口打开——出现一帧闪烁/位置错乱。serial 只在 pushChart
+    // 时递增分配,卡片存活期间不变,关闭旧卡不影响其余卡的 serial。
+    int serial = 0;
 };
 
 // 底部悬浮聊天条：输入框 + 历史面板（历史在输入行上方，同一窗口内）+ 右上角图表卡堆叠。
@@ -38,5 +43,6 @@ private:
     bool _historyCollapsed;    // 历史面板折叠状态（默认展开）
     size_t _lastEntryCount;    // 上次绘制时的历史条数，用于检测新增条目并自动滚动到底部
     std::vector<AICard> _cards;
+    int _nextSerial = 0;       // 下一张新卡分配的 serial(见 AICard::serial 注释)
 };
 #endif
